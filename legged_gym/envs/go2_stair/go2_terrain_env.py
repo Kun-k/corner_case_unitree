@@ -200,14 +200,28 @@ class Go2TerrainRobot(BaseTask):
     def compute_observations(self):
         """ Computes observations 48dim
         """
-        self.obs_buf = torch.cat((  self.base_lin_vel * self.obs_scales.lin_vel, # 3
-                                    self.base_ang_vel  * self.obs_scales.ang_vel, # 3
-                                    self.projected_gravity, # 3
-                                    self.commands[:, :3] * self.commands_scale, # 3
-                                    (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, # 12
-                                    self.dof_vel * self.obs_scales.dof_vel, # 12
-                                    self.actions # 12
-                                    ),dim=-1)
+        # TODO 新增
+        target_diff = (self.target_pos[:, :2] - self.base_pos[:, :2]) * self.obs_scales.lin_vel  # x/y偏差，缩放后加入观测
+
+        self.obs_buf = torch.cat((
+            self.base_lin_vel * self.obs_scales.lin_vel,  # 3
+            self.base_ang_vel * self.obs_scales.ang_vel,  # 3
+            self.projected_gravity,  # 3
+            self.commands[:, :3] * self.commands_scale,  # 3
+            (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,  # 12
+            self.dof_vel * self.obs_scales.dof_vel,  # 12
+            self.actions,  # 12
+            target_diff,  # 新增：2维目标点偏差
+        ), dim=-1)
+
+        # self.obs_buf = torch.cat((  self.base_lin_vel * self.obs_scales.lin_vel, # 3
+        #                             self.base_ang_vel  * self.obs_scales.ang_vel, # 3
+        #                             self.projected_gravity, # 3
+        #                             self.commands[:, :3] * self.commands_scale, # 3
+        #                             (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, # 12
+        #                             self.dof_vel * self.obs_scales.dof_vel, # 12
+        #                             self.actions # 12
+        #                             ),dim=-1)
         # add perceptive inputs if not blind
         # add noise if needed
         if self.add_noise:
@@ -222,7 +236,7 @@ class Go2TerrainRobot(BaseTask):
         print("=====================mesh_type: ", mesh_type)
         if mesh_type in ['heightfield', 'trimesh']:
             print("cfg.terrain.curriculum", self.cfg.terrain.curriculum)
-            self.terrain = Terrain(self.cfg.terrain, self.num_envs, choice=10)  # TODO 在这里修改choice
+            self.terrain = Terrain(self.cfg.terrain, self.num_envs, choice=4)  # TODO 在这里修改choice
         if mesh_type == "ground_plane":
             self._create_ground_plane()
         elif mesh_type == "heightfield":
@@ -346,6 +360,20 @@ class Go2TerrainRobot(BaseTask):
         # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
 
+    # TODO 新增函数
+    def _resample_targets(self, env_ids):
+        """随机生成目标点（训练时用）"""
+        local_target_x = torch_rand_float(self.command_ranges["target_x"][0],
+                                          self.command_ranges["target_x"][1], (len(env_ids),),
+                                          device=self.device)
+        local_target_y = torch_rand_float(self.command_ranges["target_y"][0],
+                                          self.command_ranges["target_y"][1], (len(env_ids),),
+                                          device=self.device)
+
+        # 2. 加上当前env的原点offset，转成世界坐标
+        self.target_pos[env_ids, 0] = self.env_origins[env_ids, 0] + local_target_x
+        self.target_pos[env_ids, 1] = self.env_origins[env_ids, 1] + local_target_y
+
     def _compute_torques(self, actions):
         """ Compute torques from actions.
             Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
@@ -455,7 +483,7 @@ class Go2TerrainRobot(BaseTask):
         noise_vec[12:12+self.num_actions] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
         noise_vec[12+self.num_actions:12+2*self.num_actions] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
         noise_vec[12+2*self.num_actions:12+3*self.num_actions] = 0. # previous actions
-
+        # noise_vec[12+3*self.num_actions:12+3*self.num_actions+2] = 0  # TODO 位置的noise设置0
         return noise_vec
 
     #----------------------------------------
@@ -501,7 +529,9 @@ class Go2TerrainRobot(BaseTask):
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         print("len of state: ", len(self.root_states)) # 600
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
-      
+
+        # TODO ========== 新增：目标点配置 ==========
+        self.target_pos = torch.zeros(self.num_envs, 2, device=self.device)  # 目标点坐标
 
         # joint positions offsets and PD gains
         self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
@@ -900,3 +930,10 @@ class Go2TerrainRobot(BaseTask):
     def _reward_feet_contact_forces(self):
         # penalize high contact forces
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
+
+    # TODO 新增
+    def _reward_tracking_target(self):
+        """奖励：靠近目标点"""
+        distance = torch.norm(self.target_pos[:, :2] - self.base_pos[:, :2], dim=1)
+        # 距离越近，奖励越高（指数衰减）
+        return torch.exp(-distance / self.cfg.rewards.target_sigma)

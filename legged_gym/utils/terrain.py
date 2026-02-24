@@ -170,8 +170,8 @@ class Terrain:
             terrain_utils.pyramid_stairs_terrain(terrain, step_width=0.31, step_height=step_height, platform_size=3.)
         elif choice == 4:
             # print("choice:  discrete obstacles terrain")
-            num_rectangles = 20
-            rectangle_min_size = 1.
+            num_rectangles = 100
+            rectangle_min_size = 0.5
             rectangle_max_size = 2.
 
             # # terrain 基础参数
