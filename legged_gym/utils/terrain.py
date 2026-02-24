@@ -7,7 +7,7 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg
 
 
 class Terrain:
-    def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots) -> None:
+    def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots, choice=2) -> None:
 
         self.cfg = cfg
         self.num_robots = num_robots
@@ -31,12 +31,12 @@ class Terrain:
         self.height_field_raw = np.zeros((self.tot_rows, self.tot_cols), dtype=np.int16)
         if cfg.curriculum:
             print("======use curiculum cfg======")
-            self.curiculum()
+            self.curiculum(choice=choice)  # TODO 这里是train时的地形choice入口
         elif cfg.selected:
             self.selected_terrain()
         else:
             # self.randomized_terrain() # random terrain
-            self.customed_terrain()
+            self.customed_terrain(choice=choice)  # TODO 这里是play时的地形choice入口
 
         self.heightsamples = self.height_field_raw
         if self.type == "trimesh":
@@ -59,26 +59,26 @@ class Terrain:
             terrain = self.make_terrain(choice, difficulty)
             self.add_terrain_to_map(terrain, i, j)
 
-    def customed_terrain(self):
+    def customed_terrain(self, choice=2):
         # for k in range(self.cfg.num_sub_terrains):
         #     # Env coordinates in the world
         #     (i, j) = np.unravel_index(k, (self.cfg.num_rows, self.cfg.num_cols))
 
         (i, j) = (0, 0)
         # choice = np.random.uniform(0, 1)
-        choice = 2  # 1, 2, 3, 4, 5, 6, 7
+        # choice = 2  # 1, 2, 3, 4, 5, 6, 7
         # difficulty = np.random.choice([0.5, 0.75, 0.9])
         difficulty = 0.5
         terrain = self.make_terrain_custom(choice, difficulty)
         self.add_terrain_to_map(terrain, i, j)
 
-    def curiculum(self):
+    def curiculum(self, choice=2):
         for j in range(self.cfg.num_cols):
             for i in range(self.cfg.num_rows):
-                difficulty = i / self.cfg.num_rows
-                choice = j / self.cfg.num_cols + 0.001
+                # difficulty = i / self.cfg.num_rows
+                # choice = j / self.cfg.num_cols + 0.001
                 # terrain = self.make_terrain(choice, difficulty)
-                choice = 2
+                # choice = 2
                 difficulty = 1  # 0.5
                 terrain = self.make_terrain_custom(choice, difficulty)
                 self.add_terrain_to_map(terrain, i, j)
@@ -173,6 +173,28 @@ class Terrain:
             num_rectangles = 20
             rectangle_min_size = 1.
             rectangle_max_size = 2.
+
+            # # terrain 基础参数
+            # # discrete_obstacles_height 障碍物的高度
+            # # rectangle_min_size 障碍物的最小尺寸
+            # # rectangle_max_size 障碍物的最大尺寸
+            # # num_rectangles 障碍物的数量
+            # # platform_size 中心平坦平台的尺寸
+            #
+            # import json
+            # file = "./train_terrain/terrain_param_4.json"
+            # with open(file, "r") as f:
+            #     terrain_param = json.load(f)
+            #
+            #
+            # terrain_utils.discrete_obstacles_terrain(terrain,
+            #                                          terrain_param["discrete_obstacles_height"],
+            #                                          terrain_param["rectangle_min_size"],
+            #                                          terrain_param["rectangle_max_size"],
+            #                                          terrain_param["num_rectangles"],
+            #                                          terrain_param["platform_size"])
+            # # TODO 重写一个类似discrete_obstacles_terrain功能的函数，输入高度图，生成地形
+
             terrain_utils.discrete_obstacles_terrain(terrain, discrete_obstacles_height, rectangle_min_size,
                                                      rectangle_max_size, num_rectangles, platform_size=3.)
         elif choice == 5:
@@ -182,10 +204,23 @@ class Terrain:
         elif choice == 6:
             # print("choice:  gap terrain")
             gap_terrain(terrain, gap_size=gap_size, platform_size=3.)
+        elif choice == 10:  # TODO 这里生成对抗测试的地形
+            ...
         else:
             # print("choice:  pit terrain")
             pit_terrain(terrain, depth=pit_depth, platform_size=4.)
 
+        return terrain
+
+    # TODO choice=10的地形函数
+    # 20*20的地块，platform_size=1，max_height=1
+    def discrete_obstacles_terrain_10(self, terrain, rects):
+        (i, j) = terrain.height_field_raw.shape
+        rect_size_x = i / len(rects)
+        rect_size_y = j / len(rects[0])
+        for x, rect_x in enumerate(rects):
+            for y, rect_y in enumerate(rect_x):
+                terrain.height_field_raw[int(x * rect_size_x):int((x + 1) * rect_size_x), int(y * rect_size_y):int((y + 1) * rect_size_y)] = rect_y
         return terrain
 
     def add_terrain_to_map(self, terrain, row, col):

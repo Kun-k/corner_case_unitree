@@ -1,0 +1,7 @@
+{
+  "discrete_obstacles_height": 0.2,
+  "rectangle_min_size": 1,
+  "rectangle_max_size": 2,
+  "num_rectangles": 20,
+  "platform_size": 3
+}
