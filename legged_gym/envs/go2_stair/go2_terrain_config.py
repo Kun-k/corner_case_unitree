@@ -2,7 +2,7 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class GO2TerrainCfg( LeggedRobotCfg ):
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [10, 10, 0.42] # x,y,z [m] z =0.42 # -3.0, 1.5, 0.7
+        pos = [0, 0, 0.42] # x,y,z [m] z =0.42 # -3.0, 1.5, 0.7
         # pos = [-0.0, 0.0, 0.42] # x,y,z [m] z =0.42 # -3.0, 1.5, 0.7
         default_joint_angles = { # = target angles [rad] when action = 0.0
             'FL_hip_joint': 0.1,   # [rad]
@@ -78,8 +78,8 @@ class GO2TerrainCfg( LeggedRobotCfg ):
         # num_rows = 1
         # num_cols = 1
         border_size = 25 # 25
-        terrain_length = 20. # 8.
-        terrain_width = 20. # 8.
+        terrain_length = 8. # 8.
+        terrain_width = 8. # 8.
         curriculum = True
         horizontal_scale = 0.1 # 0.05 # 自定义
         slope_treshold = 1.5 # 自定义

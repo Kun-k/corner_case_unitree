@@ -151,6 +151,7 @@ class Go2TerrainRobot(BaseTask):
         self._reset_root_states(env_ids)
 
         self._resample_commands(env_ids)
+        self._resample_targets(env_ids)
 
         # reset buffers
         self.actions[env_ids] = 0. # 加上了
@@ -329,6 +330,7 @@ class Go2TerrainRobot(BaseTask):
         # 
         env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
         self._resample_commands(env_ids)
+        self._resample_targets(env_ids)
         if self.cfg.commands.heading_command:
             forward = quat_apply(self.base_quat, self.forward_vec)
             heading = torch.atan2(forward[:, 1], forward[:, 0])
@@ -364,11 +366,11 @@ class Go2TerrainRobot(BaseTask):
     def _resample_targets(self, env_ids):
         """随机生成目标点（训练时用）"""
         local_target_x = torch_rand_float(self.command_ranges["target_x"][0],
-                                          self.command_ranges["target_x"][1], (len(env_ids),),
-                                          device=self.device)
+                                          self.command_ranges["target_x"][1], (len(env_ids), 1),
+                                          device=self.device).squeeze(1)
         local_target_y = torch_rand_float(self.command_ranges["target_y"][0],
-                                          self.command_ranges["target_y"][1], (len(env_ids),),
-                                          device=self.device)
+                                          self.command_ranges["target_y"][1], (len(env_ids), 1),
+                                          device=self.device).squeeze(1)
 
         # 2. 加上当前env的原点offset，转成世界坐标
         self.target_pos[env_ids, 0] = self.env_origins[env_ids, 0] + local_target_x
@@ -934,6 +936,10 @@ class Go2TerrainRobot(BaseTask):
     # TODO 新增
     def _reward_tracking_target(self):
         """奖励：靠近目标点"""
+        print("--------------------------------")
+        print(self.target_pos[0, :2])
+        print(self.base_pos[0, :2])
+        print("--------------------------------")
         distance = torch.norm(self.target_pos[:, :2] - self.base_pos[:, :2], dim=1)
         # 距离越近，奖励越高（指数衰减）
         return torch.exp(-distance / self.cfg.rewards.target_sigma)
