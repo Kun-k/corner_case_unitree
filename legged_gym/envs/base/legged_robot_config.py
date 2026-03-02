@@ -47,8 +47,8 @@ class LeggedRobotCfg(BaseConfig):
             lin_vel_y = [-1.0, 1.0]   # min max [m/s]
             ang_vel_yaw = [-1, 1]    # min max [rad/s]
             heading = [-3.14, 3.14]
-            target_x = [-10.0, -10.0]
-            target_y = [-10.0, -10.0]
+            target_x = [-10.0, 10.0]
+            target_y = [-10.0, 10.0]
 
     class init_state:
         pos = [0.0, 0.0, 1.] # x,y,z [m]

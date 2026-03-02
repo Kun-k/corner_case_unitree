@@ -47,11 +47,11 @@ class GO2TerrainCfg( LeggedRobotCfg ):
         soft_dof_pos_limit = 0.9
         base_height_target = 0.25
         only_positive_rewards = True # True
-        target_sigma = 0.5
+        target_sigma = 2
         class scales( LeggedRobotCfg.rewards.scales ):
             torques = -0.0002 # -0.0002
             dof_pos_limits = -10.0 # -10.0
-            tracking_target = 5
+            tracking_target = 1
             # termination = -1000 # -1000 # -5000 # -0.5
             # lin_vel_z = 0.0
             # tracking_lin_vel = 0.0 # 暂时加的
