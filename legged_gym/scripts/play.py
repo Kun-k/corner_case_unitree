@@ -16,12 +16,21 @@ def play(args):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
     env_cfg.env.num_envs = min(env_cfg.env.num_envs, 100)
+
+    # TODO
+    '''
+    terrain_width * terrain_length 的地形面积，分为 num_rows * num_cols 个格子
+    '''
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.num_cols = 5
     env_cfg.terrain.curriculum = False
-    env_cfg.noise.add_noise = False
-    env_cfg.domain_rand.randomize_friction = False
-    env_cfg.domain_rand.push_robots = False
+    env_cfg.terrain.terrain_length = 20.  # 8.
+    env_cfg.terrain.terrain_width = 20.  # 8.
+
+    # 初始化在中心点
+    center_x = env_cfg.terrain.terrain_length / 2
+    center_y = env_cfg.terrain.terrain_width / 2
+    env_cfg.init_state.pos = [center_x, center_y, 0.42]
 
     env_cfg.env.test = True
 
