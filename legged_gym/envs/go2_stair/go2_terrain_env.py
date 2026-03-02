@@ -19,6 +19,8 @@ from legged_gym.utils.helpers import class_to_dict
 from legged_gym.envs.go2_stair.go2_terrain_config import GO2TerrainCfg
 
 from legged_gym.utils.terrain import Terrain
+import global_config
+
 
 class Go2TerrainRobot(BaseTask):
     def __init__(self, cfg: GO2TerrainCfg, sim_params, physics_engine, sim_device, headless):
@@ -173,7 +175,6 @@ class Go2TerrainRobot(BaseTask):
         self.extras["x_pos"] = self.base_pos[0, 0]
         self.extras["y_pos"] = self.base_pos[0, 1]
         self.extras["z_pos"] = self.base_pos[0, 2]
-
     
     def compute_reward(self):
         """ Compute rewards
@@ -186,6 +187,7 @@ class Go2TerrainRobot(BaseTask):
             rew = self.reward_functions[i]() * self.reward_scales[name]
             self.rew_buf += rew
             self.episode_sums[name] += rew
+        # print("self.rew_buf: ", self.rew_buf)
         if self.cfg.rewards.only_positive_rewards:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
         # add termination reward after clipping
@@ -201,8 +203,6 @@ class Go2TerrainRobot(BaseTask):
     def compute_observations(self):
         """ Computes observations 48dim
         """
-        # TODO 新增
-        target_diff = (self.target_pos[:, :2] - self.base_pos[:, :2]) * self.obs_scales.lin_vel  # x/y偏差，缩放后加入观测
 
         self.obs_buf = torch.cat((
             self.base_lin_vel * self.obs_scales.lin_vel,  # 3
@@ -212,17 +212,12 @@ class Go2TerrainRobot(BaseTask):
             (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,  # 12
             self.dof_vel * self.obs_scales.dof_vel,  # 12
             self.actions,  # 12
-            target_diff,  # 新增：2维目标点偏差
         ), dim=-1)
 
-        # self.obs_buf = torch.cat((  self.base_lin_vel * self.obs_scales.lin_vel, # 3
-        #                             self.base_ang_vel  * self.obs_scales.ang_vel, # 3
-        #                             self.projected_gravity, # 3
-        #                             self.commands[:, :3] * self.commands_scale, # 3
-        #                             (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, # 12
-        #                             self.dof_vel * self.obs_scales.dof_vel, # 12
-        #                             self.actions # 12
-        #                             ),dim=-1)
+        if global_config.command_with_target_pos:
+            target_diff = (self.target_pos[:, :2] - self.base_pos[:, :2]) * self.obs_scales.lin_vel  # x/y偏差，缩放后加入观测
+            self.obs_buf = torch.cat((self.obs_buf, target_diff), dim=-1)  # 48 + 2 = 50dim
+
         # add perceptive inputs if not blind
         # add noise if needed
         if self.add_noise:
@@ -237,7 +232,7 @@ class Go2TerrainRobot(BaseTask):
         print("=====================mesh_type: ", mesh_type)
         if mesh_type in ['heightfield', 'trimesh']:
             print("cfg.terrain.curriculum", self.cfg.terrain.curriculum)
-            self.terrain = Terrain(self.cfg.terrain, self.num_envs, choice=4)  # TODO 在这里修改choice
+            self.terrain = Terrain(self.cfg.terrain, self.num_envs, choice=global_config.terrain_choice)
         if mesh_type == "ground_plane":
             self._create_ground_plane()
         elif mesh_type == "heightfield":
@@ -345,12 +340,18 @@ class Go2TerrainRobot(BaseTask):
         Args:
             env_ids (List[int]): Environments ids for which new commands are needed
         """
-        # 这里可以用于设置command
-        # 随机command
-        self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        self.commands[env_ids, 1] = torch_rand_float(self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+        if global_config.fixed_target_lin_vel:
+            self.commands[env_ids, 0] = torch.tensor(global_config.target_lin_vel[0], device=self.device)
+            self.commands[env_ids, 1] = torch.tensor(global_config.target_lin_vel[1], device=self.device)
+        else:
+            self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+            self.commands[env_ids, 1] = torch_rand_float(self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+        
         if self.cfg.commands.heading_command:
-            self.commands[env_ids, 3] = torch_rand_float(self.command_ranges["heading"][0], self.command_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+            if global_config.fixed_target_heading:
+                self.commands[env_ids, 3] = torch.tensor(global_config.target_heading, device=self.device)
+            else:
+                self.commands[env_ids, 3] = torch_rand_float(self.command_ranges["heading"][0], self.command_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)
         else:
             self.commands[env_ids, 2] = torch_rand_float(self.command_ranges["ang_vel_yaw"][0], self.command_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
 
@@ -364,15 +365,21 @@ class Go2TerrainRobot(BaseTask):
 
     # TODO 新增函数
     def _resample_targets(self, env_ids):
-        """随机生成目标点（训练时用）"""
-        local_target_x = torch_rand_float(self.command_ranges["target_x"][0],
-                                          self.command_ranges["target_x"][1], (len(env_ids), 1),
-                                          device=self.device).squeeze(1)
-        local_target_y = torch_rand_float(self.command_ranges["target_y"][0],
-                                          self.command_ranges["target_y"][1], (len(env_ids), 1),
-                                          device=self.device).squeeze(1)
 
-        # 2. 加上当前env的原点offset，转成世界坐标
+        if global_config.fixed_target_pos:
+            """固定目标点"""
+            local_target_x = torch.tensor(global_config.target_pos[0], device=self.device)
+            local_target_y = torch.tensor(global_config.target_pos[1], device=self.device)
+        else:
+            """随机生成目标点"""
+            local_target_x = torch_rand_float(self.command_ranges["target_x"][0],
+                                              self.command_ranges["target_x"][1], (len(env_ids), 1),
+                                              device=self.device).squeeze(1)
+            local_target_y = torch_rand_float(self.command_ranges["target_y"][0],
+                                              self.command_ranges["target_y"][1], (len(env_ids), 1),
+                                              device=self.device).squeeze(1)
+
+        # 加上当前env的原点offset，转成世界坐标
         self.target_pos[env_ids, 0] = self.env_origins[env_ids, 0] + local_target_x
         self.target_pos[env_ids, 1] = self.env_origins[env_ids, 1] + local_target_y
 
@@ -415,6 +422,7 @@ class Go2TerrainRobot(BaseTask):
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_state),
                                               gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+
     def _reset_root_states(self, env_ids):
         """ Resets ROOT states position and velocities of selected environmments
             Sets base position based on the curriculum
@@ -532,7 +540,7 @@ class Go2TerrainRobot(BaseTask):
         print("len of state: ", len(self.root_states)) # 600
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
 
-        # TODO ========== 新增：目标点配置 ==========
+        # 新增目标点配置，不管是否使用，都配置
         self.target_pos = torch.zeros(self.num_envs, 2, device=self.device)  # 目标点坐标
 
         # joint positions offsets and PD gains
@@ -936,10 +944,6 @@ class Go2TerrainRobot(BaseTask):
     # TODO 新增
     def _reward_tracking_target(self):
         """奖励：靠近目标点"""
-        print("--------------------------------")
-        print(self.target_pos[0, :2])
-        print(self.base_pos[0, :2])
-        print("--------------------------------")
         distance = torch.norm(self.target_pos[:, :2] - self.base_pos[:, :2], dim=1)
         # 距离越近，奖励越高（指数衰减）
         return torch.exp(-distance / self.cfg.rewards.target_sigma)

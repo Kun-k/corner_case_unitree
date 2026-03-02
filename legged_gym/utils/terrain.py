@@ -173,28 +173,13 @@ class Terrain:
             num_rectangles = 100
             rectangle_min_size = 0.5
             rectangle_max_size = 2.
-
-            # # terrain 基础参数
-            # # discrete_obstacles_height 障碍物的高度
-            # # rectangle_min_size 障碍物的最小尺寸
-            # # rectangle_max_size 障碍物的最大尺寸
-            # # num_rectangles 障碍物的数量
-            # # platform_size 中心平坦平台的尺寸
-            #
-            # import json
-            # file = "./train_terrain/terrain_param_4.json"
-            # with open(file, "r") as f:
-            #     terrain_param = json.load(f)
-            #
-            #
-            # terrain_utils.discrete_obstacles_terrain(terrain,
-            #                                          terrain_param["discrete_obstacles_height"],
-            #                                          terrain_param["rectangle_min_size"],
-            #                                          terrain_param["rectangle_max_size"],
-            #                                          terrain_param["num_rectangles"],
-            #                                          terrain_param["platform_size"])
-            # # TODO 重写一个类似discrete_obstacles_terrain功能的函数，输入高度图，生成地形
-
+            terrain_utils.discrete_obstacles_terrain(terrain, discrete_obstacles_height, rectangle_min_size,
+                                                     rectangle_max_size, num_rectangles, platform_size=3.)
+        elif choice == 0:  # 无底形
+            # print("choice:  discrete obstacles terrain")
+            num_rectangles = 0
+            rectangle_min_size = 0.5
+            rectangle_max_size = 2.
             terrain_utils.discrete_obstacles_terrain(terrain, discrete_obstacles_height, rectangle_min_size,
                                                      rectangle_max_size, num_rectangles, platform_size=3.)
         elif choice == 5:
