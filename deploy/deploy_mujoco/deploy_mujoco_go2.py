@@ -50,6 +50,7 @@ if __name__ == "__main__":
 
         default_angles = np.array(config["default_angles"], dtype=np.float32)
 
+        lin_vel_scale = config["lin_vel_scale"]
         ang_vel_scale = config["ang_vel_scale"]
         dof_pos_scale = config["dof_pos_scale"]
         dof_vel_scale = config["dof_vel_scale"]
@@ -58,7 +59,7 @@ if __name__ == "__main__":
 
         num_actions = config["num_actions"]
         num_obs = config["num_obs"]
-        
+
         cmd = np.array(config["cmd_init"], dtype=np.float32)
 
     # define context variables
@@ -95,26 +96,23 @@ if __name__ == "__main__":
                 qj = d.qpos[7:]
                 dqj = d.qvel[6:]
                 quat = d.qpos[3:7]
-                omega = d.qvel[3:6]
+                ang_vel = d.qvel[3:6]
+                lin_vel = d.qvel[0:3]
 
                 qj = (qj - default_angles) * dof_pos_scale
                 dqj = dqj * dof_vel_scale
                 gravity_orientation = get_gravity_orientation(quat)
-                omega = omega * ang_vel_scale
+                lin_vel = lin_vel * lin_vel_scale
+                ang_vel = ang_vel * ang_vel_scale
 
-                period = 0.8
-                count = counter * simulation_dt
-                phase = count % period / period
-                sin_phase = np.sin(2 * np.pi * phase)
-                cos_phase = np.cos(2 * np.pi * phase)
+                obs[0:3] = lin_vel
+                obs[3:6] = ang_vel
+                obs[6:9] = gravity_orientation
+                obs[9:12] = cmd * cmd_scale
+                obs[12:24] = qj
+                obs[24:36] = dqj
+                obs[36:48] = action
 
-                obs[:3] = omega
-                obs[3:6] = gravity_orientation
-                obs[6:9] = cmd * cmd_scale
-                obs[9 : 9 + num_actions] = qj
-                obs[9 + num_actions : 9 + 2 * num_actions] = dqj
-                obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action
-                obs[9 + 3 * num_actions : 9 + 3 * num_actions + 2] = np.array([sin_phase, cos_phase])
                 obs_tensor = torch.from_numpy(obs).unsqueeze(0)
                 # policy inference
                 action = policy(obs_tensor).detach().numpy().squeeze()
