@@ -7,4 +7,27 @@
     2. 在训练过程中尝试加入command
     3. 优化训练结果
     4. 研究如何将地形作为优化参数
-    5. 考虑使用GAN进行地形生成
+
+
+2026.03.01
+  完成:
+    1. 加入command位置进行训练，在地形2下训练效果尚可，但是好像目标位置不太准确，需要进一步检查代码
+    2. 在地形0/2/4下进一步训练，确保能够执行command
+    3. 在地形0/2/4下训练不带command的机器人
+    4. 检查play时的初始位置是否正确
+
+
+# 注意事项：
+1. 注意地形2时的初始高度
+2. tensorboard --logdir=./ --port=6006  --host=0.0.0.0
+
+
+# 试验记录
+## 已完成：
+1. --experiment_name go2_terrain_2_target_exp  --load_run Feb26_20-18-45_go2_terrain_2_target_exp_0
+    terrain 2下训练，带有目标位置，在地形0/2/4测试可以正常行走，但是目标位置不正确；但是可以使用heading和lin_vel控制移动方向
+
+## 进行中：
+--experiment_name go2_terrain_0_exp --run_name go2_terrain_0_exp_0  : terrain 0下训练，不带目标位置
+--experiment_name go2_terrain_2_exp --run_name go2_terrain_2_exp_0  : terrain 2下训练，不带目标位置
+--experiment_name go2_terrain_4_exp --run_name go2_terrain_4_exp_0  : terrain 4下训练，不带目标位置
