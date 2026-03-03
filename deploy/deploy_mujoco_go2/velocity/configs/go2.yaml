@@ -10,7 +10,7 @@
 # policy_path: "deploy/pre_train/go2/vel_flat_go2.pt"
 # policy_path: "deploy/pre_train/go2/navila.pt"
 policy_path: "deploy/pre_train/go2/vel_flat_go2_45_advanced_3000.pt"
-xml_path: "deploy/deploy_mujoco_go2/robots/go2/scene.xml"
+xml_path: "deploy/deploy_mujoco_go2/robots/go2/scene_terrain.xml"
 
 # Total simulation time
 simulation_duration: 60.0

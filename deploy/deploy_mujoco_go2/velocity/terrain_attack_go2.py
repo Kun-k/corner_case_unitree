@@ -22,7 +22,7 @@ def update_command(data, cmd, heading_stiffness, heading_target, heading_command
         heading_err = utils.wrap_to_pi(heading_target - current_heading)
         cmd[2] = np.clip(heading_err*heading_stiffness,-1,1 )
     return cmd
-        
+
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
     qx = quaternion[1]
