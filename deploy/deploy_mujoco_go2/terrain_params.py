@@ -59,6 +59,7 @@ class TerrainChanger:
         self.model.hfield_data[:] = self.original_hfield
         mujoco.mj_setConst(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
+        mujoco.mj_step(self.model, self.data)
         self.last_action = np.zeros((self.total_action_dims,), dtype=np.float32)
 
     def run(self):

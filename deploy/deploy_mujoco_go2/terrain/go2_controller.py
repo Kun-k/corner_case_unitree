@@ -41,6 +41,9 @@ class Go2Controller:
         self.cmd_scale = self.config["cmd_scale"]
         self.cmd = np.array(self.config["cmd_init"], dtype=np.float32)
 
+    def reset(self):
+        self.action_policy_prev = np.zeros(self.num_actions, dtype=np.float32)
+
     def get_observation(self, d):
         """Return the robot observation vector (same format used for the policy)."""
         qj = d.qpos[7:].copy()

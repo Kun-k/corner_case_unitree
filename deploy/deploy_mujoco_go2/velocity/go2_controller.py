@@ -83,6 +83,9 @@ class Go2Controller:
 
         return obs
 
+    def reset(self):
+        self.action_policy_prev = np.zeros(self.num_actions, dtype=np.float32)
+
     def compute_action(self, d):
         # Apply control signal here.
         self.cmd = update_command(d, self.cmd, self.heading_stiffness, self.heading_target, self.heading_command)
