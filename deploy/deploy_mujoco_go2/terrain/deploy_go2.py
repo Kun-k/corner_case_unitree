@@ -1,11 +1,11 @@
 import time
-
+import os
 import mujoco.viewer
 import mujoco
 import numpy as np
-from legged_gym import LEGGED_GYM_ROOT_DIR
 import torch
 import yaml
+import os
 
 
 def get_gravity_orientation(quaternion):
@@ -36,10 +36,10 @@ if __name__ == "__main__":
     parser.add_argument("config_file", type=str, help="config file name in the config folder")
     args = parser.parse_args()
     config_file = args.config_file
-    with open(f"{LEGGED_GYM_ROOT_DIR}/deploy/deploy_mujoco/configs/{config_file}", "r") as f:
+    with open(f"{os.path.dirname(os.path.realpath(__file__))}/configs/{config_file}", "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
-        policy_path = config["policy_path"].replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
-        xml_path = config["xml_path"].replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
+        policy_path = config["policy_path"]
+        xml_path = config["xml_path"]
 
         simulation_duration = config["simulation_duration"]
         simulation_dt = config["simulation_dt"]
@@ -81,12 +81,6 @@ if __name__ == "__main__":
         # Close the viewer automatically after simulation_duration wall-seconds.
         start = time.time()
         while viewer.is_running() and time.time() - start < simulation_duration:
-            step_start = time.time()
-            tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
-            d.ctrl[:] = tau
-            # mj_step can be replaced with code that also evaluates
-            # a policy and applies a control signal before stepping the physics.
-            mujoco.mj_step(m, d)
 
             counter += 1
             if counter % control_decimation == 0:
@@ -119,10 +113,10 @@ if __name__ == "__main__":
                 # transform action to target_dof_pos
                 target_dof_pos = action * action_scale + default_angles
 
+            tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
+            d.ctrl[:] = tau
+            mujoco.mj_step(m, d)
+
             # Pick up changes to the physics state, apply perturbations, update options from GUI.
             viewer.sync()
 
-            # Rudimentary time keeping, will drift relative to wall clock.
-            time_until_next_step = m.opt.timestep - (time.time() - step_start)
-            if time_until_next_step > 0:
-                time.sleep(time_until_next_step)
