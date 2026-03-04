@@ -90,9 +90,7 @@ class TerrainTrainer:
         self.step_counter = 0
         self.robot_counter = 0
 
-        self.start_safe_time = self.terrain_config["start_safe_time"]
-
-        self.init_skip_steps = self.go2_config["init_skip_steps"]
+        self.init_skip_time = self.go2_config["init_skip_time"]
 
     def reset(self):
         """Reset physics and counters. Returns initial observation (robot-centric).
@@ -112,12 +110,10 @@ class TerrainTrainer:
         # return initial robot observation (single value)
 
         # 前几帧不控制
-        counter = 1
-        while counter % (self.init_skip_steps + 1) != 0:
+        while self.data.time < self.init_skip_time:
             tau = pd_control(self.go2_controller.default_angles, self.data.qpos[7:], self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
             self.data.ctrl[:] = tau
             mujoco.mj_step(self.model, self.data)
-            counter += 1
 
         return self.get_terrain_observation()
 
@@ -199,28 +195,27 @@ class TerrainTrainer:
 
     def step(self, terrain_action):
 
-        if self.data.time > self.start_safe_time:
-            self.step_counter += 1
+        self.step_counter += 1
 
-            # --- [步骤 A] 备份当前机器人状态 ---
-            qpos_backup = self.data.qpos.copy()
-            qvel_backup = self.data.qvel.copy()
-            act_backup = self.data.act.copy()
+        # --- [步骤 A] 备份当前机器人状态 ---
+        qpos_backup = self.data.qpos.copy()
+        qvel_backup = self.data.qvel.copy()
+        act_backup = self.data.act.copy()
 
-            # apply terrain action via TerrainChanger and remember it
-            self.terrain_changer.apply_action_vector(terrain_action)
+        # apply terrain action via TerrainChanger and remember it
+        self.terrain_changer.apply_action_vector(terrain_action)
 
-            mujoco.mj_setConst(self.model, self.data)
+        mujoco.mj_setConst(self.model, self.data)
 
-            # --- 还原状态 ---
-            self.data.qpos[:] = qpos_backup
-            self.data.qvel[:] = qvel_backup
-            self.data.act[:] = act_backup
+        # --- 还原状态 ---
+        self.data.qpos[:] = qpos_backup
+        self.data.qvel[:] = qvel_backup
+        self.data.act[:] = act_backup
 
-            mujoco.mj_forward(self.model, self.data)
-            if self.render:
-                self.viewer.update_hfield(self.terrain_changer.hfield_id)
-                self.viewer.sync()
+        mujoco.mj_forward(self.model, self.data)
+        if self.render:
+            self.viewer.update_hfield(self.terrain_changer.hfield_id)
+            self.viewer.sync()
 
         total_sim_steps = int(self.terrain_decimation * self.control_decimation)
 

@@ -35,5 +35,3 @@ render: True
 lock_camera: True
 realtime_sim: False
 
-start_safe_time: 2
-
