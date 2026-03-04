@@ -67,8 +67,6 @@ if __name__ == "__main__":
     target_dof_pos = default_angles.copy()
     obs = np.zeros(num_obs, dtype=np.float32)
 
-    counter = 0
-
     # Load robot model
     m = mujoco.MjModel.from_xml_path(xml_path)
     d = mujoco.MjData(m)
@@ -80,9 +78,17 @@ if __name__ == "__main__":
     with mujoco.viewer.launch_passive(m, d) as viewer:
         # Close the viewer automatically after simulation_duration wall-seconds.
         start = time.time()
+
+        # 一定要先等几帧，不能马上控制
+        counter = 1
+        while counter % control_decimation != 0:
+            tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
+            d.ctrl[:] = tau
+            mujoco.mj_step(m, d)
+            counter += 1
+
         while viewer.is_running() and time.time() - start < simulation_duration:
 
-            counter += 1
             if counter % control_decimation == 0:
                 # Apply control signal here.
 
@@ -116,6 +122,9 @@ if __name__ == "__main__":
             tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
             d.ctrl[:] = tau
             mujoco.mj_step(m, d)
+
+            counter += 1
+
 
             # Pick up changes to the physics state, apply perturbations, update options from GUI.
             viewer.sync()

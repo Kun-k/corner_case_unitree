@@ -6,13 +6,12 @@ import yaml
 from typing import Tuple
 import gym
 from gym.spaces import Box
-from deploy.deploy_mujoco_go2.utils import get_gravity_orientation, quat_to_rpy, pd_control
+from deploy.deploy_mujoco_go2.utils import quat_to_rpy, pd_control
 import mujoco.viewer
 import time
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
 from deploy.deploy_mujoco_go2.terrain_params import TerrainChanger
-from deploy.deploy_mujoco_go2.velocity.go2_controller import Go2Controller
 
 
 class TerrainTrainer:
@@ -28,6 +27,14 @@ class TerrainTrainer:
         go2_config_file,
         terrain_config_file,
     ):
+
+        if go2_config_file[0] == "velocity":
+            from deploy.deploy_mujoco_go2.velocity.go2_controller import Go2Controller
+        elif go2_config_file[0] == "terrain":
+            from deploy.deploy_mujoco_go2.terrain.go2_controller import Go2Controller
+        else:
+            from deploy.deploy_mujoco_go2.velocity.go2_controller import Go2Controller
+
         self.go2_controller = Go2Controller(go2_config_file[1])
 
         # Load Go2 controller config
@@ -37,7 +44,7 @@ class TerrainTrainer:
         # MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(self.go2_config["xml_path"])
         self.data = mujoco.MjData(self.model)
-        self.model.opt.timestep = self.go2_config["simulation_dt"]  # 仿真步长，等于G2的控制步长
+        self.model.opt.timestep = self.go2_config["simulation_dt"]  # 仿真步长，等于Go2的控制步长
 
         # Terrain setup
         with open(f"{os.path.dirname(os.path.realpath(__file__))}/{terrain_config_file}", "r") as f:
@@ -85,6 +92,8 @@ class TerrainTrainer:
 
         self.start_safe_time = self.terrain_config["start_safe_time"]
 
+        self.init_skip_steps = self.go2_config["init_skip_steps"]
+
     def reset(self):
         """Reset physics and counters. Returns initial observation (robot-centric).
 
@@ -101,49 +110,20 @@ class TerrainTrainer:
         self._fallen_reported = False
         self._collision_reported = False
         # return initial robot observation (single value)
+
+        # 前几帧不控制
+        counter = 1
+        while counter % (self.init_skip_steps + 1) != 0:
+            tau = pd_control(self.go2_controller.default_angles, self.data.qpos[7:], self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
+            self.data.ctrl[:] = tau
+            mujoco.mj_step(self.model, self.data)
+            counter += 1
+
         return self.get_terrain_observation()
 
     def close_viewer(self):
         if self.render:
             self.viewer.close()
-
-    def _get_robot_observation(self):
-        """Return the robot observation vector (same format used for the policy)."""
-        qj = self.data.qpos[7:].copy()
-        dqj = self.data.qvel[6:].copy()
-        quat = self.data.qpos[3:7].copy()
-        lin_vel = self.data.qvel[:3].copy()
-        ang_vel = self.data.qvel[3:6].copy()
-
-        qj = (qj - self.go2_controller.default_angles) * self.go2_controller.dof_pos_scale
-        dqj = dqj * self.go2_controller.dof_vel_scale
-        qj = qj[self.go2_controller.policy2model]
-        dqj = dqj[self.go2_controller.policy2model]
-
-        gravity_orientation = get_gravity_orientation(quat)
-        lin_vel = lin_vel * self.go2_controller.lin_vel_scale
-        ang_vel = ang_vel * self.go2_controller.ang_vel_scale
-
-        obs = np.zeros(self.go2_controller.num_obs, dtype=np.float32)
-        if self.go2_controller.num_obs == 48:
-            obs[:3] = lin_vel
-            obs[3:6] = ang_vel
-            obs[6:9] = gravity_orientation
-            obs[9:12] = self.go2_controller.cmd * self.go2_controller.cmd_scale
-            obs[12: 12 + self.go2_controller.num_actions] = qj
-            obs[12 + self.go2_controller.num_actions: 12 + 2 * self.go2_controller.num_actions] = dqj
-            obs[12 + 2 * self.go2_controller.num_actions: 12 + 3 * self.go2_controller.num_actions] = self.go2_controller.action_policy_prev
-        elif self.go2_controller.num_obs == 45:
-            obs[:3] = ang_vel
-            obs[3:6] = gravity_orientation
-            obs[6:9] = self.go2_controller.cmd * self.go2_controller.cmd_scale
-            obs[9:21] = qj
-            obs[21:33] = dqj
-            obs[33:45] = self.go2_controller.action_policy_prev
-        else:
-            raise ValueError(f"Unsupported number of observations: {self.go2_controller.num_obs}")
-
-        return obs
 
     # ---------- terrain adversary reward helpers ----------
     def _is_fallen(self) -> bool:
@@ -245,14 +225,15 @@ class TerrainTrainer:
         total_sim_steps = int(self.terrain_decimation * self.control_decimation)
 
         # run robot controller with zero-order hold on tau
+        target_dof_pos = self.go2_controller.default_angles.copy()
         for sim_i in range(total_sim_steps):
             self.robot_counter += 1
             step_start = time.time()
             # at control boundaries compute new target and tau
             if sim_i % int(self.control_decimation) == 0:
-                tau = self.go2_controller.compute_tau(self.data)
-                self.data.ctrl[:] = tau
-
+                target_dof_pos = self.go2_controller.compute_action(self.data)
+            tau = pd_control(target_dof_pos, self.data.qpos[7:], self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
+            self.data.ctrl[:] = tau
             mujoco.mj_step(self.model, self.data)
 
             if self.render:
@@ -278,7 +259,7 @@ class TerrainTrainer:
 
     def get_terrain_observation(self):
         """Return observation for terrain policy: robot-centered observation plus last terrain action."""
-        robot_obs = self._get_robot_observation()
+        robot_obs = self.go2_controller.get_observation(self.data)
         # include previous terrain action as part of observation
         if self.total_action_dims > 0:
             return np.concatenate([robot_obs, self.terrain_changer.last_action.astype(np.float32)])

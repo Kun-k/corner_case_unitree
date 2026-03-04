@@ -22,7 +22,7 @@ def train_sac(go2_cfg, terrain_cfg, total_timesteps=20000, model_path="sac_model
 
 
 if __name__ == "__main__":
-    go2_cfg = ["velocity", "go2.yaml"]
+    go2_cfg = ["terrain", "go2.yaml"]
     terrain_cfg = "terrain_config.yaml"
     total_timesteps = 20000
     model_path = "sac_model.zip"

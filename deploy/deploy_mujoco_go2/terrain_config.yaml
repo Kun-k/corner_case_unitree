@@ -2,17 +2,17 @@
 # Parameters here are used to map normalized action outputs [-1,1] to world/grid values
 
 # forward distance range from robot base to bump center (meters)
-min_forward_dist: 0.3
-max_forward_dist: 0.8
+min_forward_dist: 0.5
+max_forward_dist: 1.0
 # maximum lateral offset in meters
-max_lateral: 0.3
-# grid-based radius scaling (grid units)
-radius_grid_min: 0.0
-radius_grid_max: 0.5
+max_lateral: 0.15
+# radius scaling (meters)
+radius_min: 0.0
+radius_max: 0.2
 # maximum absolute bump height in meters (height output is in [-1,1] -> scaled to [-max_height, max_height])
-max_bump_height: 0.2
+max_bump_height: 0.1
 # safety: minimum distance from robot base to bump center where terrain won't be changed (meters)
-no_change_radius: 0.2
+no_change_radius: 0.5
 
 # terrain obs / action settings
 # If true, terrain rewards (collision/fall) repeat every step; otherwise only first occurrence per episode
@@ -36,3 +36,4 @@ lock_camera: True
 realtime_sim: False
 
 start_safe_time: 2
+

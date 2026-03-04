@@ -42,10 +42,17 @@ class TerrainChanger:
         self.min_forward_dist = self.terrain_config['min_forward_dist']
         self.max_forward_dist = self.terrain_config['max_forward_dist']
         self.max_lateral = self.terrain_config['max_lateral']
-        self.radius_grid_min = self.terrain_config['radius_grid_min']
-        self.radius_grid_max = self.terrain_config['radius_grid_max']
         self.max_bump_height = self.terrain_config['max_bump_height']
-        self.no_change_radius = self.terrain_config['no_change_radius']
+
+        grid_resolution = self.terrain_size_x / self.ncol
+
+        radius_min = self.terrain_config['radius_min']
+        radius_max = self.terrain_config['radius_max']
+        self.radius_grid_min = radius_min / grid_resolution
+        self.radius_grid_max = radius_max / grid_resolution
+
+        no_change_radius = self.terrain_config['no_change_radius']
+        self.no_change_radius_grid = no_change_radius / grid_resolution
 
     def reset(self, mujoco_data):
         self.data = mujoco_data
@@ -163,7 +170,7 @@ class TerrainChanger:
                     dy_r = row - robot_gy
                     dist_robot = np.sqrt(dx_r * dx_r + dy_r * dy_r)
 
-                    if dist_robot < self.no_change_radius:
+                    if dist_robot < self.no_change_radius_grid:
                         continue  # 不允许修改
 
                     self.hfield[row, col] = height * np.exp(

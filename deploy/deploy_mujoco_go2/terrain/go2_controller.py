@@ -41,13 +41,13 @@ class Go2Controller:
         self.cmd_scale = self.config["cmd_scale"]
         self.cmd = np.array(self.config["cmd_init"], dtype=np.float32)
 
-    def compute_action(self, d):
-        # create observation
-        qj = d.qpos[7:]
-        dqj = d.qvel[6:]
-        quat = d.qpos[3:7]
-        lin_vel = d.qvel[:3]
-        ang_vel = d.qvel[3:6]
+    def get_observation(self, d):
+        """Return the robot observation vector (same format used for the policy)."""
+        qj = d.qpos[7:].copy()
+        dqj = d.qvel[6:].copy()
+        quat = d.qpos[3:7].copy()
+        lin_vel = d.qvel[:3].copy()
+        ang_vel = d.qvel[3:6].copy()
 
         qj = (qj - self.default_angles) * self.dof_pos_scale
         dqj = dqj * self.dof_vel_scale
@@ -57,7 +57,6 @@ class Go2Controller:
         ang_vel = ang_vel * self.ang_vel_scale
 
         obs = np.zeros(self.num_obs, dtype=np.float32)
-
         obs[:3] = lin_vel
         obs[3:6] = ang_vel
         obs[6:9] = gravity_orientation
@@ -65,6 +64,12 @@ class Go2Controller:
         obs[12: 12 + self.num_actions] = qj
         obs[12 + self.num_actions: 12 + 2 * self.num_actions] = dqj
         obs[12 + 2 * self.num_actions: 12 + 3 * self.num_actions] = self.action_policy_prev
+
+        return obs
+
+    def compute_action(self, d):
+        # create observation
+        obs = self.get_observation(d)
 
         obs_tensor = torch.from_numpy(obs).unsqueeze(0)
         # policy inference
@@ -77,19 +82,14 @@ class Go2Controller:
 
         return target_dof_pos
 
-    def compute_tau(self, d):
-        target_dof_pos = self.compute_action(d)
-        target_dq = np.zeros_like(self.kds)
-        tau = pd_control(target_dof_pos, d.qpos[7:], self.kps, target_dq, d.qvel[6:], self.kds)
-        return tau
-
     def run(self):  # 独立启动仿真运行，仿真文件路径来源于config
-        counter = 0
 
         # Load robot model
         m = mujoco.MjModel.from_xml_path(self.xml_path)
         d = mujoco.MjData(m)
         m.opt.timestep = self.simulation_dt  # TODO 需要统一设置
+
+        target_dof_pos = self.default_angles.copy()
 
         # viewer = mujoco.viewer.launch_passive(m, d)
         with mujoco.viewer.launch_passive(m, d) as viewer:
@@ -98,6 +98,15 @@ class Go2Controller:
             viewer.cam.distance = 1.5
             viewer.cam.lookat[:] = d.qpos[:3]
             # Close the viewer automatically after simulation_duration wall-seconds.
+
+            # 一定要先等几帧，不能马上控制
+            counter = 1
+            while counter % self.control_decimation != 0:
+                tau = pd_control(target_dof_pos, d.qpos[7:], self.kps, np.zeros_like(self.kds), d.qvel[6:], self.kds)
+                d.ctrl[:] = tau
+                mujoco.mj_step(m, d)
+                counter += 1
+
             start = time.time()
             while viewer.is_running() and time.time() - start < self.simulation_duration:
                 step_start = time.time()
@@ -106,12 +115,9 @@ class Go2Controller:
                     viewer.cam.lookat[:] = d.qpos[:3] # lock camera focus on the robot base
 
                 if counter % self.control_decimation == 0:
-
                     target_dof_pos = self.compute_action(d)
-
-                    # 涉及mujoco，需要放在step外部
-                    tau = pd_control(target_dof_pos, d.qpos[7:], self.kps, np.zeros_like(self.kds), d.qvel[6:], self.kds)
-                    d.ctrl[:] = tau
+                tau = pd_control(target_dof_pos, d.qpos[7:], self.kps, np.zeros_like(self.kds), d.qvel[6:], self.kds)
+                d.ctrl[:] = tau
                 counter += 1
 
                 mujoco.mj_step(m, d)

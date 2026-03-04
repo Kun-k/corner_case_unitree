@@ -45,20 +45,16 @@ class Go2Controller:
         self.cmd_scale = self.config["cmd_scale"]
         self.cmd = np.array(self.config["cmd_init"], dtype=np.float32)
 
-    def compute_action(self, d):
-        # Apply control signal here.
-        self.cmd = update_command(d, self.cmd, self.heading_stiffness, self.heading_target, self.heading_command)
-        # create observation
-        qj = d.qpos[7:]
-        dqj = d.qvel[6:]
-        quat = d.qpos[3:7]
-        lin_vel = d.qvel[:3]
-        ang_vel = d.qvel[3:6]
+    def get_observation(self, d):
+        """Return the robot observation vector (same format used for the policy)."""
+        qj = d.qpos[7:].copy()
+        dqj = d.qvel[6:].copy()
+        quat = d.qpos[3:7].copy()
+        lin_vel = d.qvel[:3].copy()
+        ang_vel = d.qvel[3:6].copy()
 
         qj = (qj - self.default_angles) * self.dof_pos_scale
         dqj = dqj * self.dof_vel_scale
-
-        # mapping qj and dqj to match the policy input order
         qj = qj[self.policy2model]
         dqj = dqj[self.policy2model]
 
@@ -67,7 +63,6 @@ class Go2Controller:
         ang_vel = ang_vel * self.ang_vel_scale
 
         obs = np.zeros(self.num_obs, dtype=np.float32)
-
         if self.num_obs == 48:
             obs[:3] = lin_vel
             obs[3:6] = ang_vel
@@ -86,6 +81,14 @@ class Go2Controller:
         else:
             raise ValueError(f"Unsupported number of observations: {self.num_obs}")
 
+        return obs
+
+    def compute_action(self, d):
+        # Apply control signal here.
+        self.cmd = update_command(d, self.cmd, self.heading_stiffness, self.heading_target, self.heading_command)
+        # create observation
+        obs = self.get_observation(d)
+
         obs_tensor = torch.from_numpy(obs).unsqueeze(0)
         # policy inference
         action_policy = self.policy(obs_tensor).detach().numpy().squeeze()
@@ -100,12 +103,6 @@ class Go2Controller:
         self.action_policy_prev[:] = action_policy
 
         return target_dof_pos
-
-    def compute_tau(self, d):
-        target_dof_pos = self.compute_action(d)
-        target_dq = np.zeros_like(self.kds)
-        tau = pd_control(target_dof_pos, d.qpos[7:], self.kps, target_dq, d.qvel[6:], self.kds)
-        return tau
 
     def run(self):  # 独立启动仿真运行，仿真文件路径来源于config
         counter = 0
