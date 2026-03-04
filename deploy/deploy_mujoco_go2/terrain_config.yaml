@@ -1,0 +1,38 @@
+# Terrain configuration for TerrainChanger and TerrainTrainer
+# Parameters here are used to map normalized action outputs [-1,1] to world/grid values
+
+# forward distance range from robot base to bump center (meters)
+min_forward_dist: 0.3
+max_forward_dist: 0.8
+# maximum lateral offset in meters
+max_lateral: 0.3
+# grid-based radius scaling (grid units)
+radius_grid_min: 0.0
+radius_grid_max: 0.5
+# maximum absolute bump height in meters (height output is in [-1,1] -> scaled to [-max_height, max_height])
+max_bump_height: 0.2
+# safety: minimum distance from robot base to bump center where terrain won't be changed (meters)
+no_change_radius: 0.2
+
+# terrain obs / action settings
+# If true, terrain rewards (collision/fall) repeat every step; otherwise only first occurrence per episode
+repeat_reward: false
+# collision detection threshold (N)
+collision_force_threshold: 80.0
+# rewards for terrain adversary
+fall_reward: 1.0
+collision_reward: 0.5
+
+# visualization / runtime
+terrain_decimation: 20
+
+fall_height_threshold: 0.6
+fall_angle_threshold: 0.7
+
+terrain_types: ["bump"]
+
+render: True
+lock_camera: True
+realtime_sim: False
+
+start_safe_time: 2

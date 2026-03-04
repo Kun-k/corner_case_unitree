@@ -3,8 +3,12 @@ import sys
 import mujoco
 import numpy as np
 import yaml
-from typing import Callable, List, Tuple
+from typing import Tuple
+import gym
+from gym.spaces import Box
 from deploy.deploy_mujoco_go2.utils import get_gravity_orientation, quat_to_rpy, pd_control
+import mujoco.viewer
+import time
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
 from deploy.deploy_mujoco_go2.terrain_params import TerrainChanger
@@ -21,32 +25,26 @@ class TerrainTrainer:
 
     def __init__(
         self,
-        config_file,
-        terrain_types=None,
-        terrain_config=None,
-        terrain_decimation=20,
-        render=False,
-        terrain_policy=None,
-        terrain_policy_device='cpu',
+        go2_config_file,
+        terrain_config_file,
     ):
-        self.go2_controller = Go2Controller(config_file)
+        self.go2_controller = Go2Controller(go2_config_file[1])
 
         # Load Go2 controller config
-        with open(f"{os.path.dirname(os.path.realpath(__file__))}/{config_file}", "r") as f:
-            self.config = yaml.load(f, Loader=yaml.FullLoader)
+        with open(f"{os.path.dirname(os.path.realpath(__file__))}/{go2_config_file[0]}/configs/{go2_config_file[1]}", "r") as f:
+            self.go2_config = yaml.load(f, Loader=yaml.FullLoader)
 
         # MuJoCo model
-        self.model = mujoco.MjModel.from_xml_path(self.config["xml_path"])
+        self.model = mujoco.MjModel.from_xml_path(self.go2_config["xml_path"])
         self.data = mujoco.MjData(self.model)
-        self.model.opt.timestep = self.config["simulation_dt"]  # 仿真步长，等于G2的控制步长
+        self.model.opt.timestep = self.go2_config["simulation_dt"]  # 仿真步长，等于G2的控制步长
 
         # Terrain setup
-        self.terrain_types = terrain_types if terrain_types is not None else ['bump']
-        self.terrain_config = terrain_config or {}
-        self.terrain_decimation = int(terrain_decimation)
-        self._robot_counter = 0
+        with open(f"{os.path.dirname(os.path.realpath(__file__))}/{terrain_config_file}", "r") as f:
+            self.terrain_config = yaml.load(f, Loader=yaml.FullLoader)
+        self.terrain_decimation = int(self.terrain_config["terrain_decimation"])
+        self.terrain_types = self.terrain_config["terrain_types"]
 
-        self.render = render
         # per-episode bookkeeping for terrain rewards
         # if repeat_reward is False (default), collision/fall rewards are given only once per episode
         self._fallen_reported = False
@@ -67,23 +65,47 @@ class TerrainTrainer:
         self.total_action_dims = total
 
         # Terrain changer helper (owns terrain policy and mapping)
-        self.terrain_changer = TerrainChanger(self.model, self.data, action_dims=self.action_dims, terrain_policy=terrain_policy, terrain_policy_device=terrain_policy_device, terrain_config=self.terrain_config)
+        self.terrain_changer = TerrainChanger(self.model, self.data, action_dims=self.action_dims, config_file=terrain_config_file)
 
         # Use controller's control decimation and PD gains
         self.control_decimation = self.go2_controller.control_decimation
 
+        self.render = self.terrain_config["render"]
+        self.lock_camera = self.terrain_config["lock_camera"]
+        self.realtime_sim = self.terrain_config["realtime_sim"]
+        if self.render:
+            self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+            self.viewer.cam.azimuth = 0
+            self.viewer.cam.elevation = -20
+            self.viewer.cam.distance = 1.5
+            self.viewer.cam.lookat[:] = self.data.qpos[:3]
+
+        self.step_counter = 0
+        self.robot_counter = 0
+
+        self.start_safe_time = self.terrain_config["start_safe_time"]
+
     def reset(self):
-        """Reset physics and counters. Returns initial observation (robot-centric)."""
-        self.data = mujoco.MjData(self.model)
+        """Reset physics and counters. Returns initial observation (robot-centric).
+
+        Accept seed/options for now but accept them to be compatible with Gym API
+        """
+        # ignore seed/options for now but accept them to be compatible with Gym API
+        print("reset")
+        mujoco.mj_resetData(self.model, self.data)
         # recreate terrain_changer with fresh data reference
-        self.terrain_changer = TerrainChanger(self.model, self.data, action_dims=self.action_dims, terrain_policy=self.terrain_changer.terrain_policy, terrain_policy_device=self.terrain_changer.terrain_policy_device, terrain_config=self.terrain_config)
-        self._robot_counter = 0
-        self._terrain_counter = 0
+        self.terrain_changer.reset(self.data)
+        self.step_counter = 0
+        self.robot_counter = 0
         # reset per-episode flags
         self._fallen_reported = False
         self._collision_reported = False
-        # return initial robot observation
-        return self._get_robot_observation()
+        # return initial robot observation (single value)
+        return self.get_terrain_observation()
+
+    def close_viewer(self):
+        if self.render:
+            self.viewer.close()
 
     def _get_robot_observation(self):
         """Return the robot observation vector (same format used for the policy)."""
@@ -108,9 +130,9 @@ class TerrainTrainer:
             obs[3:6] = ang_vel
             obs[6:9] = gravity_orientation
             obs[9:12] = self.go2_controller.cmd * self.go2_controller.cmd_scale
-            obs[12 : 12 + self.go2_controller.num_actions] = qj
-            obs[12 + self.go2_controller.num_actions : 12 + 2 * self.go2_controller.num_actions] = dqj
-            obs[12 + 2 * self.go2_controller.num_actions : 12 + 3 * self.go2_controller.num_actions] = self.go2_controller.action_policy_prev
+            obs[12: 12 + self.go2_controller.num_actions] = qj
+            obs[12 + self.go2_controller.num_actions: 12 + 2 * self.go2_controller.num_actions] = dqj
+            obs[12 + 2 * self.go2_controller.num_actions: 12 + 3 * self.go2_controller.num_actions] = self.go2_controller.action_policy_prev
         elif self.go2_controller.num_obs == 45:
             obs[:3] = ang_vel
             obs[3:6] = gravity_orientation
@@ -133,14 +155,14 @@ class TerrainTrainer:
             return False
 
         # height threshold (meters)
-        height_thresh = float(self.terrain_config.get('fall_height_threshold', 0.6))
+        height_thresh = float(self.terrain_config["fall_height_threshold"])
         if base_z < height_thresh:
             return True
 
         # orientation check (roll/pitch)
         try:
             r, p, y = quat_to_rpy(self.data.qpos[3:7])
-            ang_thresh = float(self.terrain_config.get('fall_angle_threshold', 0.7))
+            ang_thresh = float(self.terrain_config["fall_angle_threshold"])
             if abs(r) > ang_thresh or abs(p) > ang_thresh:
                 return True
         except Exception:
@@ -158,13 +180,13 @@ class TerrainTrainer:
             cfrc = np.array(self.data.cfrc_ext)  # shape (nbody, 6)
             forces = np.linalg.norm(cfrc[:, :3], axis=1)
             max_force = float(np.max(forces))
-            force_thresh = float(self.terrain_config.get('collision_force_threshold', 80.0))
+            force_thresh = float(self.terrain_config["collision_force_threshold"])
             return max_force > force_thresh
         except Exception:
             # attribute not available or other issue; safe fallback: no collision
             return False
 
-    def compute_terrain_reward(self) -> float:
+    def compute_terrain_reward(self) -> Tuple[float, dict]:
         """Compute the terrain-agent reward: positive when robot collides or falls.
 
         Returns a scalar reward and stores diagnostic flags in info dict when called from step().
@@ -179,100 +201,151 @@ class TerrainTrainer:
         collided = self._has_collision()
 
         reward = 0.0
-        repeat = bool(self.terrain_config.get('repeat_reward', False))
+        repeat = bool(self.terrain_config["repeat_reward"])
 
         # give fall reward
         if fallen and (repeat or not self._fallen_reported):
-            r = float(self.terrain_config.get('fall_reward', 1.0))
+            r = float(self.terrain_config["fall_reward"])
             reward += r
             self._fallen_reported = True
 
         # give collision reward
         if collided and (repeat or not self._collision_reported):
-            r = float(self.terrain_config.get('collision_reward', 0.5))
+            r = float(self.terrain_config["collision_reward"])
             reward += r
             self._collision_reported = True
 
         return reward, {'fallen': fallen, 'collided': collided}
 
-    def step(self):
-        # step开始时先执行地形控制，然后执行多步机器人控制
+    def step(self, terrain_action):
 
-        # if no terrain_action provided, ask TerrainChanger to select one (policy or random fallback)
-        robot_obs = self._get_robot_observation()
-        terrain_action = self.terrain_changer.select_action(robot_obs, data=self.data)
+        if self.data.time > self.start_safe_time:
+            self.step_counter += 1
 
-        # apply terrain action via TerrainChanger
-        self.terrain_changer.apply_action_vector(terrain_action)
+            # --- [步骤 A] 备份当前机器人状态 ---
+            qpos_backup = self.data.qpos.copy()
+            qvel_backup = self.data.qvel.copy()
+            act_backup = self.data.act.copy()
 
-        # simulation_dt为一个timestep的时间长度
-        # control_decimation为控制机器人的周期时间步数量，simulation_dt * control_decimation为控制机器人的周期时长
-        # terrain_decimation表示控制几次机器人后控制一次地形
-        # total_sim_steps表示一个地形step包含的总仿真步数
-        # 地形的控制周期较长，所以一个step中会多次达到self.control_decimation
+            # apply terrain action via TerrainChanger and remember it
+            self.terrain_changer.apply_action_vector(terrain_action)
+
+            mujoco.mj_setConst(self.model, self.data)
+
+            # --- 还原状态 ---
+            self.data.qpos[:] = qpos_backup
+            self.data.qvel[:] = qvel_backup
+            self.data.act[:] = act_backup
+
+            mujoco.mj_forward(self.model, self.data)
+            if self.render:
+                self.viewer.update_hfield(self.terrain_changer.hfield_id)
+                self.viewer.sync()
+
         total_sim_steps = int(self.terrain_decimation * self.control_decimation)
 
-        # We'll recompute policy output and PD tau at the beginning of each control interval and
-        # apply the same tau for physics_steps_per_control consecutive simulator steps (zero-order hold).
+        # run robot controller with zero-order hold on tau
         for sim_i in range(total_sim_steps):
-            if self.render:  # TODO 啥意思？
-                pass
+            self.robot_counter += 1
+            step_start = time.time()
+            # at control boundaries compute new target and tau
+            if sim_i % int(self.control_decimation) == 0:
+                tau = self.go2_controller.compute_tau(self.data)
+                self.data.ctrl[:] = tau
 
-            if sim_i % self.control_decimation == 0:
-                target_dof_pos = self.go2_controller.compute_action(self.data)
-                target_dq = np.zeros_like(self.go2_controller.kds)
-                q = self.data.qpos[7:]
-                dq = self.data.qvel[6:]
+            mujoco.mj_step(self.model, self.data)
 
-                for _ in range(4):
-                    tau = pd_control(target_dof_pos, q, self.go2_controller.kps, target_dq, dq, self.go2_controller.kds)
-                    self.data.ctrl[:] = tau
-                    mujoco.mj_step(self.model, self.data)
+            if self.render:
+                if self.lock_camera:
+                    self.viewer.cam.lookat[:] = self.data.qpos[:3]
+                self.viewer.sync()
 
-        # after sim steps, return robot observation to terrain agent
-        obs = self._get_robot_observation()
+            if self.realtime_sim:  # 只能确保仿真不比真实世界快，但是可能会比真实世界慢，取决于计算开销
+                time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
+                if time_until_next_step > 0:
+                    time.sleep(time_until_next_step)
 
-        # TODO 处理reward和info
-        # # terrain adversary reward (expose in info but do not replace robot_reward)
-        # terrain_reward, terrain_info = self.compute_terrain_reward()
-        # info = {'terrain_reward': float(terrain_reward), **terrain_info}
-        info = {}
+        # compute terrain reward and next obs
+        terrain_reward, terrain_info = self.compute_terrain_reward()
+        next_terrain_obs = self.get_terrain_observation()
 
-        return obs, None, False, info
+        info = {'terrain_reward': float(terrain_reward), **terrain_info}
+        done = False  # TODO 是否需要根据fall和collision判断
 
-    # ----- data collection / viewer-run helpers -----
-    def collect_dataset(self, num_steps: int = 1000) -> List[Tuple[np.ndarray, np.ndarray, float, np.ndarray, bool]]:
-        dataset = []
+        print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
 
-        # ensure the mujoco viewer is active during simulation
-        with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
-            obs = self.reset()
-            for t in range(int(num_steps)):
+        return next_terrain_obs, np.asarray(terrain_action, dtype=np.float32), float(terrain_reward), done, info
 
-                next_obs, _, done, info = self.step()
+    def get_terrain_observation(self):
+        """Return observation for terrain policy: robot-centered observation plus last terrain action."""
+        robot_obs = self._get_robot_observation()
+        # include previous terrain action as part of observation
+        if self.total_action_dims > 0:
+            return np.concatenate([robot_obs, self.terrain_changer.last_action.astype(np.float32)])
+        return robot_obs
 
-                action = None  # TODO action
-                reward = None  # TODO reward
-                dataset.append((obs, action, reward, next_obs, done))
 
-                obs = next_obs
+class TerrainGymEnv(gym.Env):
+    """Gym wrapper around TerrainTrainer for on-policy RL (terrain agent).
 
-                # optional viewer sync to keep display responsive
-                try:
-                    viewer.update_hfield(self.terrain_changer.hfield_id)
-                    mujoco.mj_setConst(self.model, self.data)
-                    mujoco.mj_forward(self.model, self.data)
-                    mujoco.mj_step(self.model, self.data)
-                    viewer.sync()
-                except Exception:
-                    pass
+    Observation: terrain observation (robot state + last terrain action)
+    Action: flat terrain action vector in [-1,1]^action_dim
+    Reward: terrain reward (collision/fall)
+    """
+    def __init__(self, trainer: 'TerrainTrainer', steps_per_terrain: int = None, max_episode_steps: int = 1000):
+        super().__init__()
+        self.trainer = trainer
+        self.steps_per_terrain = steps_per_terrain or trainer.terrain_decimation
+        obs_dim = trainer.get_terrain_observation().shape[0]
+        act_dim = trainer.total_action_dims
+        self.observation_space = Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+        if act_dim > 0:
+            self.action_space = Box(low=-1.0, high=1.0, shape=(act_dim,), dtype=np.float32)
+        else:
+            self.action_space = Box(low=-1.0, high=1.0, shape=(0,), dtype=np.float32)
+        self.max_episode_steps = max_episode_steps
+        self._step_count = 0
 
-        return dataset
+    def reset(self, *, seed=None, options=None):
+        # call trainer.reset in a way that is compatible with multiple trainer implementations
+        res = self.trainer.reset()
+
+        # Normalize return to (obs, info)
+        if isinstance(res, tuple):
+            if len(res) == 2:
+                obs, info = res
+            elif len(res) == 1:
+                obs = res[0]
+                info = {}
+            else:
+                # unexpected extra return values: take first two
+                obs = res[0]
+                info = res[1] if isinstance(res[1], dict) else {}
+        else:
+            obs = res
+            info = {}
+
+        self._step_count = 0
+        return obs, info
+
+    def step(self, action):
+        next_obs, act, reward, done, info = self.trainer.step(terrain_action=action)
+        self._step_count += 1
+
+        # Determine truncation (time limit) vs termination (env terminal)
+        truncated = False
+        if self._step_count >= self.max_episode_steps:
+            truncated = True
+
+        terminated = bool(done)
+
+        # Always return the 5-tuple (obs, reward, terminated, truncated, info)
+        return next_obs, float(reward), bool(terminated), bool(truncated), info
+
+    def render(self, mode='human'):
+        # trainer handles rendering via its `render` flag and external viewer
+        pass
 
 
 if __name__ == "__main__":
-    # small demo: collect a short dataset while running the mujoco viewer
-    trainer = TerrainTrainer("velocity/configs/go2.yaml", terrain_types=['bump'], terrain_decimation=20, render=True)
-    # collect 50 terrain steps and print summary
-    dataset = trainer.collect_dataset(num_steps=50)
-    print(f"Collected {len(dataset)} transitions")
+    ...

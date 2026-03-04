@@ -16,7 +16,7 @@
     <material name="terrain_mat" texture="groundplane" texuniform="true" texrepeat="10 10" reflectance="0.2"/>
 
     <!-- 高度场地形 -->
-    <hfield name="terrain_hfield" nrow="100" ncol="100" size="5.0 5.0 0.5 0.1"/>
+    <hfield name="terrain_hfield" nrow="100" ncol="100" size="20.0 20.0 0.5 0.1"/>
   </asset>
 
   <worldbody>
