@@ -109,11 +109,28 @@ class TerrainTrainer:
         self._collision_reported = False
         # return initial robot observation (single value)
 
-        # 前几帧不控制
-        while self.data.time < self.init_skip_time:
-            tau = pd_control(self.go2_controller.default_angles, self.data.qpos[7:], self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
+        # 前10帧不控制，且提供一定2s的保护时间
+        target_dof_pos = self.go2_controller.default_angles.copy()
+        total_sim_steps = int(self.init_skip_time / self.model.opt.timestep) + 10  # 2s保护时间 + 10帧控制空窗期
+        for sim_i in range(total_sim_steps):
+            step_start = time.time()
+            # at control boundaries compute new target and tau
+            if sim_i >= 10 and sim_i % int(self.control_decimation) == 0:
+                target_dof_pos = self.go2_controller.compute_action(self.data)
+            tau = pd_control(target_dof_pos, self.data.qpos[7:], self.go2_controller.kps,
+                             np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
             self.data.ctrl[:] = tau
             mujoco.mj_step(self.model, self.data)
+
+            if self.render:
+                if self.lock_camera:
+                    self.viewer.cam.lookat[:] = self.data.qpos[:3]
+                self.viewer.sync()
+
+            if self.realtime_sim:  # 只能确保仿真不比真实世界快，但是可能会比真实世界慢，取决于计算开销
+                time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
+                if time_until_next_step > 0:
+                    time.sleep(time_until_next_step)
 
         return self.get_terrain_observation()
 
@@ -162,7 +179,7 @@ class TerrainTrainer:
             # attribute not available or other issue; safe fallback: no collision
             return False
 
-    def compute_terrain_reward(self) -> Tuple[float, dict]:
+    def compute_terrain_reward(self) -> Tuple[float, dict, bool]:
         """Compute the terrain-agent reward: positive when robot collides or falls.
 
         Returns a scalar reward and stores diagnostic flags in info dict when called from step().
@@ -191,7 +208,7 @@ class TerrainTrainer:
             reward += r
             self._collision_reported = True
 
-        return reward, {'fallen': fallen, 'collided': collided}
+        return reward, {'fallen': fallen, 'collided': collided}, (collided or fallen)
 
     def step(self, terrain_action):
 
@@ -242,11 +259,11 @@ class TerrainTrainer:
                     time.sleep(time_until_next_step)
 
         # compute terrain reward and next obs
-        terrain_reward, terrain_info = self.compute_terrain_reward()
+        terrain_reward, terrain_info, done = self.compute_terrain_reward()
         next_terrain_obs = self.get_terrain_observation()
 
         info = {'terrain_reward': float(terrain_reward), **terrain_info}
-        done = False  # TODO 是否需要根据fall和collision判断
+        # done = False  # TODO 是否需要根据fall和collision判断
 
         print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
 
