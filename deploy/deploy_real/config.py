@@ -1,7 +1,5 @@
-from legged_gym import LEGGED_GYM_ROOT_DIR
 import numpy as np
 import yaml
-
 
 class Config:
     def __init__(self, file_path) -> None:
@@ -10,34 +8,34 @@ class Config:
 
             self.control_dt = config["control_dt"]
 
+            self.joint2motor_idx = config["joint2motor_idx"]
+            
             self.msg_type = config["msg_type"]
             self.imu_type = config["imu_type"]
 
-            self.weak_motor = []
-            if "weak_motor" in config:
-                self.weak_motor = config["weak_motor"]
-
             self.lowcmd_topic = config["lowcmd_topic"]
             self.lowstate_topic = config["lowstate_topic"]
+            self.cloud_topic = config["cloud_topic"]
+            
+            self.policy_path = config["policy_path"]
 
-            self.policy_path = config["policy_path"].replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
-
-            self.leg_joint2motor_idx = config["leg_joint2motor_idx"]
-            self.kps = config["kps"]
-            self.kds = config["kds"]
+            self.kps = np.array(config["kps"],dtype=np.float32)
+            self.kds = np.array(config["kds"],dtype=np.float32)
             self.default_angles = np.array(config["default_angles"], dtype=np.float32)
 
-            self.arm_waist_joint2motor_idx = config["arm_waist_joint2motor_idx"]
-            self.arm_waist_kps = config["arm_waist_kps"]
-            self.arm_waist_kds = config["arm_waist_kds"]
-            self.arm_waist_target = np.array(config["arm_waist_target"], dtype=np.float32)
+            self.obs_scales_ang_vel = config["obs_scales_ang_vel"]
+            self.obs_scales_dof_pos = config["obs_scales_dof_pos"]
+            self.obs_scales_dof_vel = config["obs_scales_dof_vel"]
 
-            self.ang_vel_scale = config["ang_vel_scale"]
-            self.dof_pos_scale = config["dof_pos_scale"]
-            self.dof_vel_scale = config["dof_vel_scale"]
+            self.command_scale = config["command_scale"]
             self.action_scale = config["action_scale"]
-            self.cmd_scale = np.array(config["cmd_scale"], dtype=np.float32)
-            self.max_cmd = np.array(config["max_cmd"], dtype=np.float32)
 
             self.num_actions = config["num_actions"]
-            self.num_obs = config["num_obs"]
+            self.num_obs = config["num_obs"] 
+            
+            self.history_length = config["history_length"]
+            self.proprio_obs_dim = config["proprio_obs_dim"]
+            self.full_frame_min_pts = config.get("full_frame_min_pts", 16000)
+            self.pc_cache_len = config.get("pc_cache_len", 4)
+            
+            self.save_image = config.get("save_image", False)  # Default to False if not specified
