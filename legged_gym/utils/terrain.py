@@ -162,7 +162,7 @@ class Terrain:
         elif choice == 2:
             # print("choice:  random uniform terrain")
             terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.)  # 生成更陡峭的uniform
-            terrain_utils.random_uniform_terrain(terrain, min_height=-0.1, max_height=0.1, step=0.005,
+            terrain_utils.random_uniform_terrain(terrain, min_height=-0.2, max_height=0.2, step=0.005,
                                                  downsampled_scale=0.2)  # -0.05, 0.05, 0.005, 0.2
         elif choice == 3:
             # print("choice:  pyramid stairs terrain")

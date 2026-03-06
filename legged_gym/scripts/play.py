@@ -30,7 +30,7 @@ def play(args):
     # 初始化在中心点
     center_x = env_cfg.terrain.terrain_length / 2
     center_y = env_cfg.terrain.terrain_width / 2
-    env_cfg.init_state.pos = [center_x, center_y, 0.42]
+    env_cfg.init_state.pos = [center_x, center_y, 2]
 
     env_cfg.env.test = True
 

@@ -1,17 +1,17 @@
 from math import pi
 
-terrain_choice = 4
+terrain_choice = 2
 
-command_with_target_pos = True
+command_with_target_pos = False
 fixed_target_pos = True
 target_pos = [10, 10]
 
-fixed_target_heading = True
+fixed_target_heading = False
 target_heading_deg = 90
 target_heading = target_heading_deg * pi / 180
 # 右为0度，逆时针旋转
 
-fixed_target_lin_vel = True
+fixed_target_lin_vel = False
 target_lin_vel = [1.0, -1.0]
 # x=1为上，y=1为左
 
