@@ -5,27 +5,7 @@ import mujoco
 import numpy as np
 import torch
 import yaml
-import os
-
-
-def get_gravity_orientation(quaternion):
-    qw = quaternion[0]
-    qx = quaternion[1]
-    qy = quaternion[2]
-    qz = quaternion[3]
-
-    gravity_orientation = np.zeros(3)
-
-    gravity_orientation[0] = 2 * (-qz * qx + qw * qy)
-    gravity_orientation[1] = -2 * (qz * qy + qw * qx)
-    gravity_orientation[2] = 1 - 2 * (qw * qw + qz * qz)
-
-    return gravity_orientation
-
-
-def pd_control(target_q, q, kp, target_dq, dq, kd):
-    """Calculates torques from position commands"""
-    return (target_q - q) * kp + (target_dq - dq) * kd
+from deploy.deploy_mujoco_go2.utils import get_gravity_orientation, pd_control, update_command
 
 
 if __name__ == "__main__":
@@ -61,6 +41,9 @@ if __name__ == "__main__":
         num_obs = config["num_obs"]
 
         cmd = np.array(config["cmd_init"], dtype=np.float32)
+        heading_stiffness = config["heading_stiffness"]
+        heading_target = config["heading_target"]
+        heading_command = config["heading_command"]
 
     # define context variables
     action = np.zeros(num_actions, dtype=np.float32)
@@ -93,6 +76,9 @@ if __name__ == "__main__":
                 # Apply control signal here.
 
                 # create observation
+
+                cmd = update_command(d, cmd, heading_stiffness, heading_target, heading_command)
+
                 qj = d.qpos[7:]
                 dqj = d.qvel[6:]
                 quat = d.qpos[3:7]

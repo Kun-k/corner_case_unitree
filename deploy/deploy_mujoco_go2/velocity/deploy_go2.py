@@ -8,39 +8,7 @@ import yaml
 import sys
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
-import deploy.deploy_mujoco_go2.utils as utils
-
-# Implement the following functions refer in velocity_command.py
-def update_command(data, cmd, heading_stiffness, heading_target, heading_command = True):
-    """Post-processes the velocity command.
-
-    This function sets velocity command to zero for standing environments and computes angular
-    velocity from heading direction if the heading_command flag is set.
-    """
-    if heading_command:
-        current_heading = utils.quat_to_heading_w(data.qpos[3:7])
-        heading_err = utils.wrap_to_pi(heading_target - current_heading)
-        cmd[2] = np.clip(heading_err*heading_stiffness,-1,1 )
-    return cmd
-        
-def get_gravity_orientation(quaternion):
-    qw = quaternion[0]
-    qx = quaternion[1]
-    qy = quaternion[2]
-    qz = quaternion[3]
-
-    gravity_orientation = np.zeros(3)
-
-    gravity_orientation[0] = 2 * (-qz * qx + qw * qy)
-    gravity_orientation[1] = -2 * (qz * qy + qw * qx)
-    gravity_orientation[2] = 1 - 2 * (qw * qw + qz * qz)
-
-    return gravity_orientation
-
-
-def pd_control(target_q, q, kp, target_dq, dq, kd):
-    """Calculates torques from position commands"""
-    return (target_q - q) * kp + (target_dq - dq) * kd
+from deploy.deploy_mujoco_go2.utils import get_gravity_orientation, pd_control, update_command
 
 
 if __name__ == "__main__":

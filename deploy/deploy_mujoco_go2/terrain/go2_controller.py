@@ -8,7 +8,7 @@ import yaml
 import sys
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
-from deploy.deploy_mujoco_go2.utils import get_gravity_orientation, pd_control
+from deploy.deploy_mujoco_go2.utils import update_command, get_gravity_orientation, pd_control
 
 
 class Go2Controller:
@@ -38,6 +38,9 @@ class Go2Controller:
         self.dof_pos_scale = self.config["dof_pos_scale"]
         self.dof_vel_scale = self.config["dof_vel_scale"]
         self.action_scale = self.config["action_scale"]
+        self.heading_stiffness = self.config["heading_stiffness"]
+        self.heading_target = self.config["heading_target"]
+        self.heading_command = self.config["heading_command"]
         self.cmd_scale = self.config["cmd_scale"]
         self.cmd = np.array(self.config["cmd_init"], dtype=np.float32)
 
@@ -71,6 +74,7 @@ class Go2Controller:
         return obs
 
     def compute_action(self, d):
+        self.cmd = update_command(d, self.cmd, self.heading_stiffness, self.heading_target, self.heading_command)
         # create observation
         obs = self.get_observation(d)
 

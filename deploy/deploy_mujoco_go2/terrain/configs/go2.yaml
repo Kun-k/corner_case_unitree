@@ -34,15 +34,13 @@ cmd_scale: [2.0, 2.0, 0.25]
 num_actions: 12
 #num_obs: 45
 num_obs: 48
-mapping_joints: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] # mapping joint actions to a specified order
 
-# TODO: customizable command controller
 # isaaclab default set heading_command True
 # our pre_trained model use heading_command True so you may retrain policy if you want to use heading_command False
 # heading_command: False # using cmd_init[2] directly controll yaw speed
 # heading_command: True  # use the heading_target controll target yaw (cmd_init[2] is ignored)
 heading_command: True
-heading_target: 0.5 # yaw target in [-pi, pi] (facing to)
+heading_target: 1.0 # yaw target in [-pi, pi] (facing to)
 heading_stiffness: 0.5
 
 cmd_init: [1.0, 0, 0] # move forward [-1,1]
