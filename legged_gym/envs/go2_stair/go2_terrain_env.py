@@ -3,6 +3,9 @@ import time
 from warnings import WarningMessage
 import numpy as np
 import os
+from math import pi
+
+import yaml
 
 from isaacgym.torch_utils import *
 from isaacgym import gymtorch, gymapi, gymutil
@@ -19,7 +22,6 @@ from legged_gym.utils.helpers import class_to_dict
 from legged_gym.envs.go2_stair.go2_terrain_config import GO2TerrainCfg
 
 from legged_gym.utils.terrain import Terrain
-import global_config
 
 
 class Go2TerrainRobot(BaseTask):
@@ -37,11 +39,12 @@ class Go2TerrainRobot(BaseTask):
             headless (bool): Run without rendering if True
         """
         self.cfg = cfg
+        self.runtime_cfg = self._load_runtime_cfg()
         self.sim_params = sim_params
         self.height_samples = None
         self.debug_viz = False
         self.init_done = False
-        self._parse_cfg(self.cfg)
+        self._parse_cfg()
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
 
         if not self.headless:
@@ -153,7 +156,6 @@ class Go2TerrainRobot(BaseTask):
         self._reset_root_states(env_ids)
 
         self._resample_commands(env_ids)
-        self._resample_targets(env_ids)
 
         # reset buffers
         self.actions[env_ids] = 0. # 加上了
@@ -214,12 +216,6 @@ class Go2TerrainRobot(BaseTask):
             self.actions,  # 12
         ), dim=-1)
 
-        if global_config.command_with_target_pos:
-            target_diff = (self.target_pos[:, :2] - self.base_pos[:, :2]) * self.obs_scales.lin_vel  # x/y偏差，缩放后加入观测
-            self.obs_buf = torch.cat((self.obs_buf, target_diff), dim=-1)  # 48 + 2 = 50dim
-
-        # add perceptive inputs if not blind
-        # add noise if needed
         if self.add_noise:
             self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
 
@@ -232,14 +228,14 @@ class Go2TerrainRobot(BaseTask):
         print("=====================mesh_type: ", mesh_type)
         if mesh_type in ['heightfield', 'trimesh']:
             print("cfg.terrain.curriculum", self.cfg.terrain.curriculum)
-            self.terrain = Terrain(self.cfg.terrain, self.num_envs, choice=global_config.terrain_choice)
+            terrain_choice = self.runtime_cfg["terrain"]["terrain_choice"]
+            self.terrain = Terrain(self.cfg.terrain, self.num_envs, choice=terrain_choice)
         if mesh_type == "ground_plane":
             self._create_ground_plane()
         elif mesh_type == "heightfield":
             self._create_heightfield()
         elif mesh_type == "trimesh":
             self._create_trimesh()
-        # self._create_ground_plane()
         self._create_envs()
         # # 增加楼梯
         # self._create_stairs(env_handle)
@@ -325,7 +321,6 @@ class Go2TerrainRobot(BaseTask):
         # 
         env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
         self._resample_commands(env_ids)
-        self._resample_targets(env_ids)
         if self.cfg.commands.heading_command:
             forward = quat_apply(self.base_quat, self.forward_vec)
             heading = torch.atan2(forward[:, 1], forward[:, 0])
@@ -340,48 +335,23 @@ class Go2TerrainRobot(BaseTask):
         Args:
             env_ids (List[int]): Environments ids for which new commands are needed
         """
-        if global_config.fixed_target_lin_vel:
-            self.commands[env_ids, 0] = torch.tensor(global_config.target_lin_vel[0], device=self.device)
-            self.commands[env_ids, 1] = torch.tensor(global_config.target_lin_vel[1], device=self.device)
+        cmd_cfg = self.runtime_cfg["commands"]
+        if cmd_cfg["fixed_target_lin_vel"]:
+            self.commands[env_ids, 0] = torch.tensor(cmd_cfg["target_lin_vel"][0], device=self.device)
+            self.commands[env_ids, 1] = torch.tensor(cmd_cfg["target_lin_vel"][1], device=self.device)
         else:
             self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
             self.commands[env_ids, 1] = torch_rand_float(self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        
+
         if self.cfg.commands.heading_command:
-            if global_config.fixed_target_heading:
-                self.commands[env_ids, 3] = torch.tensor(global_config.target_heading, device=self.device)
+            if cmd_cfg["fixed_target_heading"]:
+                self.commands[env_ids, 3] = torch.tensor(cmd_cfg["target_heading"], device=self.device)
             else:
                 self.commands[env_ids, 3] = torch_rand_float(self.command_ranges["heading"][0], self.command_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)
         else:
             self.commands[env_ids, 2] = torch_rand_float(self.command_ranges["ang_vel_yaw"][0], self.command_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
 
-        # 自定义command
-        # self.commands[env_ids, 0] = torch.tensor(0.5)
-        # self.commands[env_ids, 1] = torch.tensor(0.0)
-        # self.commands[env_ids, 2] = torch.tensor(0.0)
-        # self.commands[env_ids, 3] = torch.tensor(0.0)
-        # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
-
-    # TODO 新增函数
-    def _resample_targets(self, env_ids):
-
-        if global_config.fixed_target_pos:
-            """固定目标点"""
-            local_target_x = torch.tensor(global_config.target_pos[0], device=self.device)
-            local_target_y = torch.tensor(global_config.target_pos[1], device=self.device)
-        else:
-            """随机生成目标点"""
-            local_target_x = torch_rand_float(self.command_ranges["target_x"][0],
-                                              self.command_ranges["target_x"][1], (len(env_ids), 1),
-                                              device=self.device).squeeze(1)
-            local_target_y = torch_rand_float(self.command_ranges["target_y"][0],
-                                              self.command_ranges["target_y"][1], (len(env_ids), 1),
-                                              device=self.device).squeeze(1)
-
-        # 加上当前env的原点offset，转成世界坐标
-        self.target_pos[env_ids, 0] = self.env_origins[env_ids, 0] + local_target_x
-        self.target_pos[env_ids, 1] = self.env_origins[env_ids, 1] + local_target_y
 
     def _compute_torques(self, actions):
         """ Compute torques from actions.
@@ -539,9 +509,6 @@ class Go2TerrainRobot(BaseTask):
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         print("len of state: ", len(self.root_states)) # 600
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
-
-        # 新增目标点配置，不管是否使用，都配置
-        self.target_pos = torch.zeros(self.num_envs, 2, device=self.device)  # 目标点坐标
 
         # joint positions offsets and PD gains
         self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
@@ -771,7 +738,7 @@ class Go2TerrainRobot(BaseTask):
             self.env_origins[:, 1] = spacing * yy.flatten()[:self.num_envs]
             self.env_origins[:, 2] = 0.
 
-    def _parse_cfg(self, cfg):
+    def _parse_cfg(self):
         self.dt = self.cfg.control.decimation * self.sim_params.dt
         self.obs_scales = self.cfg.normalization.obs_scales
         self.reward_scales = class_to_dict(self.cfg.rewards.scales)
@@ -783,6 +750,28 @@ class Go2TerrainRobot(BaseTask):
         print("dt: ", self.dt) # 0.019999999552965164
 
         self.cfg.domain_rand.push_interval = np.ceil(self.cfg.domain_rand.push_interval_s / self.dt)
+
+    def _load_runtime_cfg(self):
+        cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+        defaults = {
+            "terrain": {"terrain_choice": 2},
+            "commands": {
+                "fixed_target_lin_vel": False,
+                "target_lin_vel": [1.0, -1.0],
+                "fixed_target_heading": False,
+                "target_heading_deg": 90.0,
+            }
+        }
+        for section, values in defaults.items():
+            data.setdefault(section, {})
+            for key, val in values.items():
+                data[section].setdefault(key, val)
+
+        data["commands"]["target_heading"] = data["commands"]["target_heading_deg"] * pi / 180.0
+        return data
 
     def render_step(self, obs=None, sync_frame_time=True):
         '''*************************************************************************
@@ -940,10 +929,3 @@ class Go2TerrainRobot(BaseTask):
     def _reward_feet_contact_forces(self):
         # penalize high contact forces
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
-
-    # TODO 新增
-    def _reward_tracking_target(self):
-        """奖励：靠近目标点"""
-        distance = torch.norm(self.target_pos[:, :2] - self.base_pos[:, :2], dim=1)
-        # 距离越近，奖励越高（指数衰减）
-        return torch.exp(-distance / self.cfg.rewards.target_sigma)

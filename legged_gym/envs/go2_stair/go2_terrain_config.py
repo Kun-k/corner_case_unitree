@@ -1,5 +1,4 @@
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
-import global_config
 
 class GO2TerrainCfg( LeggedRobotCfg ):
     class init_state( LeggedRobotCfg.init_state ):
@@ -48,11 +47,9 @@ class GO2TerrainCfg( LeggedRobotCfg ):
         soft_dof_pos_limit = 0.9
         base_height_target = 0.25
         only_positive_rewards = True # True
-        target_sigma = global_config.reward_target_sigma
         class scales( LeggedRobotCfg.rewards.scales ):
             torques = -0.0002 # -0.0002
             dof_pos_limits = -10.0 # -10.0
-            tracking_target = global_config.reward_scale_tracking_target
             # termination = -1000 # -1000 # -5000 # -0.5
             # lin_vel_z = 0.0
             # tracking_lin_vel = 0.0 # 暂时加的
@@ -92,5 +89,3 @@ class GO2TerrainCfgPPO( LeggedRobotCfgPPO ):
     class runner( LeggedRobotCfgPPO.runner ):
         run_name = ''
         experiment_name = 'go2_terrain'
-
-
