@@ -91,19 +91,6 @@ def quat_to_rpy(quat):
 
     return roll, pitch, yaw
 
-# Implement the following functions refer in velocity_command.py
-def update_command(data, cmd, heading_stiffness, heading_target, heading_command=True):
-    """Post-processes the velocity command.
-
-    This function sets velocity command to zero for standing environments and computes angular
-    velocity from heading direction if the heading_command flag is set.
-    """
-    if heading_command:
-        current_heading = quat_to_heading_w(data.qpos[3:7])
-        heading_err = wrap_to_pi(heading_target - current_heading)
-        cmd[2] = np.clip(heading_err*heading_stiffness,-1,1 )
-    return cmd
-
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
     qx = quaternion[1]

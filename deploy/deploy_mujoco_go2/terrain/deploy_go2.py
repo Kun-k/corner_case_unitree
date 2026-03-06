@@ -5,7 +5,20 @@ import mujoco
 import numpy as np
 import torch
 import yaml
-from deploy.deploy_mujoco_go2.utils import get_gravity_orientation, pd_control, update_command
+from deploy.deploy_mujoco_go2.utils import get_gravity_orientation, pd_control, quat_to_heading_w, wrap_to_pi
+
+
+def update_command(data, cmd, heading_stiffness, heading_target, heading_command=True):
+    """Post-processes the velocity command.
+
+    This function sets velocity command to zero for standing environments and computes angular
+    velocity from heading direction if the heading_command flag is set.
+    """
+    if heading_command:
+        current_heading = quat_to_heading_w(data.qpos[3:7])
+        heading_err = wrap_to_pi(heading_target - current_heading)
+        cmd[2] = np.clip(heading_err * heading_stiffness, -1, 1)
+    return cmd
 
 
 if __name__ == "__main__":

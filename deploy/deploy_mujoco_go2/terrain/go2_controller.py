@@ -8,7 +8,7 @@ import yaml
 import sys
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
-from deploy.deploy_mujoco_go2.utils import update_command, get_gravity_orientation, pd_control
+from deploy.deploy_mujoco_go2.utils import get_gravity_orientation, pd_control, quat_to_heading_w, wrap_to_pi
 
 
 class Go2Controller:
@@ -73,8 +73,20 @@ class Go2Controller:
 
         return obs
 
+    def update_command(self, data, cmd, heading_stiffness, heading_target, heading_command=True):
+        """Post-processes the velocity command.
+
+        This function sets velocity command to zero for standing environments and computes angular
+        velocity from heading direction if the heading_command flag is set.
+        """
+        if heading_command:
+            current_heading = quat_to_heading_w(data.qpos[3:7])
+            heading_err = wrap_to_pi(heading_target - current_heading)
+            cmd[2] = np.clip(heading_err * heading_stiffness, -1, 1)
+        return cmd
+
     def compute_action(self, d):
-        self.cmd = update_command(d, self.cmd, self.heading_stiffness, self.heading_target, self.heading_command)
+        self.cmd = self.update_command(d, self.cmd, self.heading_stiffness, self.heading_target, self.heading_command)
         # create observation
         obs = self.get_observation(d)
 
