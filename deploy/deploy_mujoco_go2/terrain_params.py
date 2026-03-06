@@ -153,7 +153,7 @@ class TerrainChanger:
             self.set_solref(float(solref_scaled))
             idx += self.action_dims['solref']
 
-        self.last_action = np.asarray(action, dtype=np.float32).reshape(-1)
+        # self.last_action = np.asarray(action, dtype=np.float32).reshape(-1)
 
     def set_bump(self, gx, gy, radius, height, robot_gx, robot_gy):
 

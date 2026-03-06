@@ -4,8 +4,8 @@ import mujoco
 import numpy as np
 import yaml
 from typing import Tuple
-import gym
-from gym.spaces import Box
+import gymnasium as gym
+from gymnasium.spaces import Box
 from deploy.deploy_mujoco_go2.utils import quat_to_rpy, pd_control
 import mujoco.viewer
 import time
@@ -268,6 +268,8 @@ class TerrainTrainer:
         # compute terrain reward and next obs
         terrain_reward, terrain_info, done = self.compute_terrain_reward()
         next_terrain_obs = self.get_terrain_observation()
+
+        self.terrain_changer.last_action = np.asarray(terrain_action, dtype=np.float32)
 
         info = {'terrain_reward': float(terrain_reward), **terrain_info}
         # done = False  # TODO 是否需要根据fall和collision判断
