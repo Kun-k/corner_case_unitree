@@ -1,4 +1,4 @@
-from terrain_trainer import TerrainTrainer, TerrainGymEnv
+from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
@@ -87,8 +87,8 @@ if __name__ == "__main__":
     # TODO 参数化
     # TODO 绘图
     go2_cfg = ["terrain", "go2.yaml"]
-    terrain_cfg = "terrain_config.yaml"
+    terrain_cfg = "train_SAC/terrain_config.yaml"
     total_timesteps = 20000
-    max_episode_steps = 35
+    max_episode_steps = 350
     model_path = "sac_model.zip"
     train_sac(go2_cfg, terrain_cfg, total_timesteps=total_timesteps, max_episode_steps=max_episode_steps, model_path=model_path)

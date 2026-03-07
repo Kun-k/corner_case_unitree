@@ -31,7 +31,7 @@ terrain_decimation: 10
 
 terrain_types: ["bump"]
 
-render: False
+render: True
 lock_camera: True
 realtime_sim: False
 

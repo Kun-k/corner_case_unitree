@@ -91,6 +91,7 @@ class TerrainTrainer:
         self.robot_counter = 0
 
         self.init_skip_time = self.go2_config["init_skip_time"]
+        self.init_skip_frame = 10
 
     def reset(self):
         """Reset physics and counters. Returns initial observation (robot-centric).
@@ -114,9 +115,9 @@ class TerrainTrainer:
         self._collision_reported = False
         # return initial robot observation (single value)
 
-        # 前10帧不控制，且提供一定2s的保护时间
+        # 前10帧不控制，且提供2s的保护时间
         target_dof_pos = self.go2_controller.default_angles.copy()
-        total_sim_steps = int(self.init_skip_time / self.model.opt.timestep) + 10  # 2s保护时间 + 10帧控制空窗期
+        total_sim_steps = int(self.init_skip_time / self.model.opt.timestep) + self.init_skip_frame  # 2s保护时间 + 10帧控制空窗期
         for sim_i in range(total_sim_steps):
             step_start = time.time()
             # at control boundaries compute new target and tau
@@ -142,80 +143,6 @@ class TerrainTrainer:
     def close_viewer(self):
         if self.render:
             self.viewer.close()
-
-    # # ---------- terrain adversary reward helpers ----------
-    # def _is_fallen(self) -> bool:
-    #     """Detect if the robot has fallen based on base height or large body tilt."""
-    #     try:
-    #         base_z = float(self.data.qpos[2])
-    #     except Exception:
-    #         # if qpos not available, assume not fallen
-    #         return False
-    #
-    #     # height threshold (meters)
-    #     height_thresh = float(self.terrain_config["fall_height_threshold"])
-    #     print(f"Base height: {base_z:.3f} m, fall threshold: {height_thresh:.3f} m")
-    #     if base_z < height_thresh:
-    #         return True
-    #
-    #     # orientation check (roll/pitch)
-    #     try:
-    #         r, p, y = quat_to_rpy(self.data.qpos[3:7])
-    #         ang_thresh = float(self.terrain_config["fall_angle_threshold"])
-    #         print(f"Roll: {r:.3f} rad, pitch: {p:.3f} rad, fall threshold: {ang_thresh:.3f} rad")
-    #         if abs(r) > ang_thresh or abs(p) > ang_thresh:
-    #             return True
-    #     except Exception:
-    #         pass
-    #
-    #     return False
-    #
-    # def _has_collision(self) -> bool:
-    #     """Detect large external contact forces as a proxy for collisions.
-    #
-    #     Tries to read `data.cfrc_ext` if available and checks if any body experiences
-    #     force magnitude above a threshold. If the attribute is unavailable, returns False.
-    #     """
-    #     try:
-    #         cfrc = np.array(self.data.cfrc_ext)  # shape (nbody, 6)
-    #         forces = np.linalg.norm(cfrc[:, :3], axis=1)
-    #         max_force = float(np.max(forces))
-    #         force_thresh = float(self.terrain_config["collision_force_threshold"])
-    #         return max_force > force_thresh
-    #     except Exception:
-    #         # attribute not available or other issue; safe fallback: no collision
-    #         return False
-    #
-    # def compute_terrain_reward(self) -> Tuple[float, dict, bool]:
-    #     """Compute the terrain-agent reward: positive when robot collides or falls.
-    #
-    #     Returns a scalar reward and stores diagnostic flags in info dict when called from step().
-    #     Configuration via `self.terrain_config` keys:
-    #       - 'fall_height_threshold' (m), default 0.6
-    #       - 'fall_angle_threshold' (rad), default 0.7
-    #       - 'fall_reward', default 1.0
-    #       - 'collision_force_threshold', default 80.0 (N)
-    #       - 'collision_reward', default 0.5
-    #     """
-    #     fallen = self._is_fallen()
-    #     collided = self._has_collision()
-    #
-    #     reward = 0.0
-    #     repeat = bool(self.terrain_config["repeat_reward"])
-    #
-    #     # give fall reward
-    #     if fallen and (repeat or not self._fallen_reported):
-    #         r = float(self.terrain_config["fall_reward"])
-    #         reward += r
-    #         self._fallen_reported = True
-    #
-    #     # give collision reward
-    #     if collided and (repeat or not self._collision_reported):
-    #         r = float(self.terrain_config["collision_reward"])
-    #         reward += r
-    #         self._collision_reported = True
-    #
-    #     return reward, {'fallen': fallen, 'collided': collided}, (collided or fallen)
 
     def step(self, terrain_action):
 
@@ -278,6 +205,40 @@ class TerrainTrainer:
 
         return next_terrain_obs, np.asarray(terrain_action, dtype=np.float32), float(terrain_reward), done, info
 
+    def step_only_robot(self):
+        # run robot controller with zero-order hold on tau
+        target_dof_pos = self.go2_controller.default_angles.copy()
+        for sim_i in range(self.control_decimation):
+            self.robot_counter += 1
+            step_start = time.time()
+            # at control boundaries compute new target and tau
+            if sim_i % int(self.control_decimation) == 0:
+                target_dof_pos = self.go2_controller.compute_action(self.data)
+            tau = pd_control(target_dof_pos, self.data.qpos[7:], self.go2_controller.kps,
+                             np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
+            self.data.ctrl[:] = tau
+            mujoco.mj_step(self.model, self.data)
+
+            if self.render:
+                if self.lock_camera:
+                    self.viewer.cam.lookat[:] = self.data.qpos[:3]
+                self.viewer.sync()
+
+            if self.realtime_sim:  # 只能确保仿真不比真实世界快，但是可能会比真实世界慢，取决于计算开销
+                time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
+                if time_until_next_step > 0:
+                    time.sleep(time_until_next_step)
+
+        # compute terrain reward and next obs
+        terrain_reward, terrain_info, done = self.compute_terrain_reward()
+
+        info = {'terrain_reward': float(terrain_reward), **terrain_info}
+
+        print(
+            f"robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
+
+        return None, None, float(terrain_reward), done, info
+
     def get_terrain_observation(self):
         """Return observation for terrain policy: robot-centered observation plus last terrain action."""
         robot_obs = self.go2_controller.get_observation(self.data)
@@ -286,117 +247,174 @@ class TerrainTrainer:
             return np.concatenate([robot_obs, self.terrain_changer.last_action.astype(np.float32)])
         return robot_obs
 
-    def compute_terrain_reward(self) -> Tuple[float, dict, bool]:
-
-        reward = 0.0
-        repeat = bool(self.terrain_config["repeat_reward"])
-
-        # =========================
-        # 1️⃣ 基础状态
-        # =========================
+    # ---------- terrain reward helpers ----------
+    def _collect_motion_state(self) -> Tuple[float, float, float, float, float]:
         base_z = float(self.data.qpos[2])
-        lin_vel = np.linalg.norm(self.data.qvel[:2])
-        ang_vel = self.data.qvel[3:6]
-
-        # 计算 roll / pitch
+        lin_vel = float(np.linalg.norm(self.data.qvel[:2]))
         quat = self.data.qpos[3:7]
-        r, p, _ = quat_to_rpy(quat)
+        roll, pitch, _ = quat_to_rpy(quat)
+        target_speed = float(self.terrain_config["target_speed"])
+        return base_z, lin_vel, float(roll), float(pitch), target_speed
 
-        # =========================
-        # 2️⃣ 摔倒判断
-        # =========================
-        fallen = False
-        if base_z < float(self.terrain_config["fall_height_threshold"]):
-            fallen = True
-        if abs(r) > float(self.terrain_config["fall_angle_threshold"]) \
-                or abs(p) > float(self.terrain_config["fall_angle_threshold"]):
-            fallen = True
+    def _get_ground_height_at_xy(self, x: float, y: float) -> float:
+        """Estimate terrain surface height at world XY from the active hfield."""
+        hfield_id = int(self.terrain_changer.hfield_id)
+        nrow = int(self.model.hfield_nrow[hfield_id])
+        ncol = int(self.model.hfield_ncol[hfield_id])
 
-        if fallen and (repeat or not self._fallen_reported):
-            reward += float(self.terrain_config["fall_reward"])
+        size_x = float(self.model.hfield_size[hfield_id][0])  # half-size x
+        size_y = float(self.model.hfield_size[hfield_id][1])  # half-size y
+        z_scale = float(self.model.hfield_size[hfield_id][2])
+
+        center_x = float(self.model.geom_pos[self.terrain_changer.geom_id][0])
+        center_y = float(self.model.geom_pos[self.terrain_changer.geom_id][1])
+        center_z = float(self.model.geom_pos[self.terrain_changer.geom_id][2])
+
+        # map world xy -> normalized [0,1] inside hfield footprint
+        u = (x - center_x + size_x) / (2.0 * size_x)
+        v = (y - center_y + size_y) / (2.0 * size_y)
+        u = float(np.clip(u, 0.0, 1.0))
+        v = float(np.clip(v, 0.0, 1.0))
+
+        col = int(np.clip(round(u * (ncol - 1)), 0, ncol - 1))
+        row = int(np.clip(round(v * (nrow - 1)), 0, nrow - 1))
+
+        # model.hfield_data stores height samples; world z is scaled by size[2]
+        h = float(self.terrain_changer.hfield[row, col])
+        return center_z + z_scale * h
+
+    def _is_fallen(self, base_z: float, roll: float, pitch: float) -> bool:
+        x = float(self.data.qpos[0])
+        y = float(self.data.qpos[1])
+        ground_z = self._get_ground_height_at_xy(x, y)
+        base_rel_height = base_z - ground_z
+
+        if base_rel_height < float(self.terrain_config["fall_height_threshold"]):
+            return True
+        angle_thresh = float(self.terrain_config["fall_angle_threshold"])
+        return abs(roll) > angle_thresh or abs(pitch) > angle_thresh
+
+    def _compute_fall_reward(self, fallen: bool, repeat: bool) -> float:
+        if not fallen:
+            return 0.0
+        if repeat or not self._fallen_reported:
             self._fallen_reported = True
+            return float(self.terrain_config["fall_reward"])
+        return 0.0
 
-        # =========================
-        # 3️⃣ 接触分析
-        # =========================
+    def _analyze_contacts(self) -> Tuple[bool, bool, bool]:
         collided = False
         base_collision = False
         thigh_collision = False
+        force_thresh = float(self.terrain_config["collision_force_threshold"])
 
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
-
             force = np.zeros(6)
             mujoco.mj_contactForce(self.model, self.data, i, force)
             f_mag = np.linalg.norm(force[:3])
-
-            if f_mag < float(self.terrain_config["collision_force_threshold"]):
+            if f_mag < force_thresh:
                 continue
 
             collided = True
-
             geom1 = contact.geom1
             geom2 = contact.geom2
-
             body1 = self.model.geom_bodyid[geom1]
             body2 = self.model.geom_bodyid[geom2]
-
             name1 = self.model.body(body1).name
             name2 = self.model.body(body2).name
 
-            # 判断 base
             if "base" in name1 or "base" in name2:
                 base_collision = True
-
-            # 判断 thigh
             if "thigh" in name1 or "thigh" in name2:
                 thigh_collision = True
 
-        # base collision reward
+        return collided, base_collision, thigh_collision
+
+    def _compute_collision_reward(self, collided: bool, base_collision: bool, thigh_collision: bool, repeat: bool) -> float:
+        reward = 0.0
         if base_collision and (repeat or not self._collision_reported):
             reward += float(self.terrain_config["base_collision_reward"])
             self._collision_reported = True
-
-        # thigh collision reward
         if thigh_collision:
             reward += float(self.terrain_config["thigh_collision_reward"])
-
-        # 普通碰撞
         if collided:
             reward += float(self.terrain_config["collision_reward"])
+        return reward
 
-        # =========================
-        # 4️⃣ 失稳奖励（连续）
-        # =========================
-        tilt = abs(r) + abs(p)
-        reward += float(self.terrain_config["tilt_reward_scale"]) * tilt
+    def _compute_tilt_reward(self, roll: float, pitch: float) -> Tuple[float, float]:
+        tilt = abs(roll) + abs(pitch)
+        reward = float(self.terrain_config["tilt_reward_scale"]) * tilt
+        return float(tilt), float(reward)
 
-        # =========================
-        # 5️⃣ 速度破坏奖励
-        # =========================
-        target_speed = float(self.terrain_config["target_speed"])
+    def _compute_speed_reward(self, lin_vel: float, target_speed: float) -> float:
         speed_loss = max(0.0, target_speed - lin_vel)
-        reward += float(self.terrain_config["speed_reward_scale"]) * speed_loss
+        return float(self.terrain_config["speed_reward_scale"]) * speed_loss
 
-        # =========================
-        # 6️⃣ 卡住检测
-        # =========================
-        stuck = False
-        if lin_vel < float(self.terrain_config["stuck_speed_threshold"]) \
-                and target_speed > 0.2:
-            stuck = True
-            reward += float(self.terrain_config["stuck_reward"])
+    def _compute_stuck_reward(self, lin_vel: float, target_speed: float) -> Tuple[bool, float]:
+        stuck = lin_vel < float(self.terrain_config["stuck_speed_threshold"]) and target_speed > 0.2
+        if not stuck:
+            return False, 0.0
+        return True, float(self.terrain_config["stuck_reward"])
 
-        # =========================
-        # 7️⃣ 终止逻辑
-        # =========================
-        done = False
+    def _is_out_of_terrain_edge(self) -> bool:
+        """Check whether robot base xy leaves terrain bounds (with optional margin)."""
+        x = float(self.data.qpos[0])
+        y = float(self.data.qpos[1])
 
+        # Prefer TerrainChanger geometry if available; fallback to config defaults.
+        size_x = float(getattr(self.terrain_changer, "terrain_size_x", self.terrain_config.get("terrain_size_x", 10.0)))
+        size_y = float(getattr(self.terrain_changer, "terrain_size_y", self.terrain_config.get("terrain_size_y", 10.0)))
+        center_x = float(getattr(self.terrain_changer, "terrain_center_x", self.terrain_config.get("terrain_center_x", 0.0)))
+        center_y = float(getattr(self.terrain_changer, "terrain_center_y", self.terrain_config.get("terrain_center_y", 0.0)))
+
+        margin = 1
+
+        half_x = size_x * 0.5 - margin
+        half_y = size_y * 0.5 - margin
+        if half_x <= 0.0 or half_y <= 0.0:
+            return False
+
+        return (abs(x - center_x) >= half_x) or (abs(y - center_y) >= half_y)
+
+    def _compute_done(self, fallen: bool, base_collision: bool, out_of_terrain_edge: bool) -> bool:
         if fallen and self.terrain_config["terminate_on_fall"]:
-            done = True
-
+            return True
         if base_collision and self.terrain_config["terminate_on_base_collision"]:
-            done = True
+            return True
+        if out_of_terrain_edge:
+            return True
+
+        return False
+
+    def compute_terrain_reward(self) -> Tuple[float, dict, bool]:
+        reward = 0.0
+        repeat = bool(self.terrain_config["repeat_reward"])
+
+        base_z, lin_vel, roll, pitch, target_speed = self._collect_motion_state()
+
+        # 1. 判断是否跌倒并计算跌倒奖励
+        fallen = self._is_fallen(base_z, roll, pitch)
+        reward += self._compute_fall_reward(fallen, repeat)
+
+        # 2. 分析接触信息并计算碰撞奖励
+        collided, base_collision, thigh_collision = self._analyze_contacts()
+        reward += self._compute_collision_reward(collided, base_collision, thigh_collision, repeat)
+
+        # 3. 计算倾斜奖励
+        tilt, tilt_reward = self._compute_tilt_reward(roll, pitch)
+        reward += tilt_reward
+
+        # 4. 计算速度奖励
+        reward += self._compute_speed_reward(lin_vel, target_speed)
+
+        # 5. 计算被卡住奖励
+        stuck, stuck_reward = self._compute_stuck_reward(lin_vel, target_speed)
+        reward += stuck_reward
+
+        # 6. 继续判断是否到达地形边缘，并计算done条件
+        out_of_terrain_edge = self._is_out_of_terrain_edge()
+        done = self._compute_done(fallen, base_collision, out_of_terrain_edge)
 
         info = {
             "fallen": fallen,
@@ -406,7 +424,10 @@ class TerrainTrainer:
             "stuck": stuck,
             "tilt": tilt,
             "speed": lin_vel,
-            "base_height": base_z
+            "base_height": base_z,
+            "ground_height": self._get_ground_height_at_xy(float(self.data.qpos[0]), float(self.data.qpos[1])),
+            "base_rel_height": base_z - self._get_ground_height_at_xy(float(self.data.qpos[0]), float(self.data.qpos[1])),
+            "out_of_terrain_edge": out_of_terrain_edge,
         }
 
         return reward, info, done

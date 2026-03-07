@@ -165,7 +165,7 @@ def main():
     parser.add_argument("--safe-radius-m", type=float, default=1.0)
     parser.add_argument("--blend-radius-m", type=float, default=2.0)
 
-    parser.add_argument("--out-dir", type=str, default="deploy/deploy_mujoco_go2/train_CMA_ES/cmaes_logs")
+    parser.add_argument("--out-dir", type=str, default="deploy/deploy_mujoco_go2/train_CMA_ES/logs/cmaes_logs")
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -263,5 +263,5 @@ if __name__ == "__main__":
 
 
 '''
-python deploy/deploy_mujoco_go2/train_CMA_ES/cmaes_optimize_trig_terrain.py --go2-task terrain --go2-config go2.yaml --terrain-config terrain_config.yaml --generations 100 --popsize 8 --mode-y 10 --mode-x 10
+nohup python deploy/deploy_mujoco_go2/train_CMA_ES/cmaes_optimize_trig_terrain.py --go2-task terrain --go2-config go2.yaml --terrain-config terrain_config.yaml --generations 100 --popsize 8 --mode-y 10 --mode-x 10  >emaes.out 2>&1 &
 '''

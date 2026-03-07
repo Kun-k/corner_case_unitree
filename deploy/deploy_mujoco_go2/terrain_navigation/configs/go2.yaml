@@ -21,7 +21,7 @@ ang_vel_scale: 0.25
 dof_pos_scale: 1.0
 dof_vel_scale: 0.05
 action_scale: 0.25
-cmd_scale: [0.15, 0.15, 0.25]
+cmd_scale: [0.2, 0.2, 0.25]
 num_actions: 12
 num_obs: 48
 
@@ -40,8 +40,8 @@ navigation:
 
   # used when mode=random
   random_range:
-    x: [-10.0, 10.0]  # xy与训练情况一致，参照训练的yaml配置文件
-    y: [-10.0, 10.0]
+    x: [-5.0, 5.0]  # xy与训练情况一致，参照训练的yaml配置文件
+    y: [-5.0, 5.0]
     heading_deg: [-180.0, 180.0]  # 与训练一直，大部分情况固定
 
   switch_on_reach: true

@@ -6,7 +6,7 @@ if __name__ == "__main__":
 
     go2_cfg = ["terrain", "go2.yaml"]
     terrain_cfg = "train_CMA_ES/terrain_config.yaml"
-    path = "deploy/deploy_mujoco_go2/train_CMA_ES/cmaes_logs/best_angle_array.npy"
+    path = "deploy/deploy_mujoco_go2/train_CMA_ES/logs/cmaes_logs/best_angle_array.npy"
     max_robot_steps = 350
 
     trainer = TerrainTrainer(go2_cfg, terrain_cfg)
