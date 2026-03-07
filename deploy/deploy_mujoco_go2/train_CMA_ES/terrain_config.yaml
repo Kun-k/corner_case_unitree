@@ -2,15 +2,15 @@
 # Parameters here are used to map normalized action outputs [-1,1] to world/grid values
 
 # forward distance range from robot base to bump center (meters)
-min_forward_dist: 0.4
-max_forward_dist: 0.8
+min_forward_dist: 0.6
+max_forward_dist: 0.12
 # maximum lateral offset in meters
 max_lateral: 0.3
 # radius scaling (meters)
 radius_min: 0.0
-radius_max: 0.4
+radius_max: 0.8
 # maximum absolute bump height in meters (height output is in [-1,1] -> scaled to [-max_height, max_height])
-max_bump_height: 0.12
+max_bump_height: 0.1
 # safety: minimum distance from robot base to bump center where terrain won't be changed (meters)
 no_change_radius: 0.4
 
@@ -31,7 +31,7 @@ terrain_decimation: 10
 
 terrain_types: ["bump"]
 
-render: False
+render: True
 lock_camera: True
 realtime_sim: False
 

@@ -1,0 +1,10 @@
+{
+  "best_fitness": -586.0,
+  "best_reward": 586.0,
+  "generations": 1000,
+  "popsize": 8,
+  "mode_y": 10,
+  "mode_x": 10,
+  "safe_radius_m": 1.0,
+  "blend_radius_m": 2.0
+}
