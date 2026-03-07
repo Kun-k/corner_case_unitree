@@ -73,6 +73,7 @@ class GO2TerrainCfg( LeggedRobotCfg ):
             lin_vel_z = -2.0
             ang_vel_xy = -0.05
             torques = -0.0002
+            dof_acc = -2.5e-7
             action_rate = -0.01
             collision = -1.
             dof_pos_limits = -10.0
@@ -85,7 +86,6 @@ class GO2TerrainCfg( LeggedRobotCfg ):
             tracking_lin_vel = 0
             orientation = 0
             dof_vel = 0
-            dof_acc = 0
             base_height = 0
             feet_stumble = 0
             stand_still = 0

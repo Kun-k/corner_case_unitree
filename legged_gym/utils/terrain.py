@@ -162,7 +162,7 @@ class Terrain:
         elif choice == 2:
             # print("choice:  random uniform terrain")
             terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.)  # 生成更陡峭的uniform
-            terrain_utils.random_uniform_terrain(terrain, min_height=-0.2, max_height=0.2, step=0.005,
+            terrain_utils.random_uniform_terrain(terrain, min_height=-0.1, max_height=0.1, step=0.005,
                                                  downsampled_scale=0.2)  # -0.05, 0.05, 0.005, 0.2
         elif choice == 3:
             # print("choice:  pyramid stairs terrain")
@@ -175,7 +175,7 @@ class Terrain:
             rectangle_max_size = 2.
             terrain_utils.discrete_obstacles_terrain(terrain, discrete_obstacles_height, rectangle_min_size,
                                                      rectangle_max_size, num_rectangles, platform_size=3.)
-        elif choice == 0:  # 无底形
+        elif choice == 0:  #无地形
             # print("choice:  discrete obstacles terrain")
             num_rectangles = 0
             rectangle_min_size = 0.5

@@ -206,8 +206,8 @@ class Go2TerrainRobot(BaseTask):
             self.base_lin_vel * self.obs_scales.lin_vel,  # 3
             self.base_ang_vel * self.obs_scales.ang_vel,  # 3
             self.projected_gravity,  # 3
-            (self.cmd_world[:, :2] - self.base_pos[:, :2]) * self.obs_distance_scale,
-            self.cmd_world[:, 2:] * self.obs_scales.ang_vel,  # 1
+            self.commands[:, :2] * self.obs_distance_scale,
+            self.commands[:, 2:] * self.obs_scales.ang_vel,  # 1
             (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,  # 12
             self.dof_vel * self.obs_scales.dof_vel,  # 12
             self.actions,  # 12
@@ -316,8 +316,8 @@ class Go2TerrainRobot(BaseTask):
     def _resample_commands(self, env_ids=None):
         target_cfg = self.runtime_cfg["targets"]
 
+        # 寻找更新target的env_ids
         if env_ids is None:
-            # 寻找需要重新采样cmd的env_id
             switch_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
             if target_cfg["switch_on_reach"]:
                 distance = torch.norm(self.cmd_world[:, :2] - self.base_pos[:, :2], dim=1)
@@ -326,30 +326,43 @@ class Go2TerrainRobot(BaseTask):
                 switch_mask |= (self.episode_length_buf % self.target_switch_interval_steps) == 0
             env_ids = switch_mask.nonzero(as_tuple=False).flatten()
 
+        # 更新target_point
+        target_point = torch.zeros((len(env_ids), self.cfg.commands.num_commands), dtype=torch.float, device=self.device, requires_grad=False)
         if target_cfg["auto_sample_targets"] or self.num_target_points == 0:  # 不适用预定义目标点
             local_target_x = torch_rand_float(self.command_ranges["target_x"][0], self.command_ranges["target_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
             local_target_y = torch_rand_float(self.command_ranges["target_y"][0], self.command_ranges["target_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
             heading = torch_rand_float(self.command_ranges["heading"][0], self.command_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)
 
             # Store local cmd; world bias is applied in _update_world_targets_from_local_cmd.
-            self.commands[env_ids, 0] = local_target_x
-            self.commands[env_ids, 1] = local_target_y
-            self.commands[env_ids, 2] = heading
-
+            target_point[:, 0] = local_target_x
+            target_point[:, 1] = local_target_y
+            target_point[:, 2] = heading
         else:
+            target_point = self.target_points[self.target_list_index[env_ids]]
             self.target_list_index[env_ids] = (self.target_list_index[env_ids] + 1) % self.num_target_points
-            self.commands[env_ids, :] = self.target_points[self.target_list_index[env_ids]]
 
-        # xy坐标转换
-        # cmd为以机器人起点为原点的局部坐标
+        # 对更新后的target points做xy坐标转换
+        # target_point为以机器人起点为原点的局部坐标
         # cmd_world为以世界坐标为原点的坐标
-        self.cmd_world[env_ids, 0] = self.commands[env_ids, 0] + self.env_origins[env_ids, 0]
-        self.cmd_world[env_ids, 1] = self.commands[env_ids, 1] + self.env_origins[env_ids, 1]
+        self.cmd_world[env_ids, 0] = target_point[:, 0] + self.env_origins[env_ids, 0]
+        self.cmd_world[env_ids, 1] = target_point[:, 1] + self.env_origins[env_ids, 1]
+        self.cmd_world[env_ids, 2] = target_point[:, 2]
 
-        # heading 转换到四元数 aug_vel, commands存储的是目标heading，cmd_world里存储的四元数
+        # 对所有env_ids计算commands
+        # commands[0:2]为距离
+        self.commands[:, :2] = self.cmd_world[:, :2] - self.base_pos[:, :2]
+        # commands[2]为heading误差
         forward = quat_apply(self.base_quat, self.forward_vec)
-        heading = torch.atan2(forward[env_ids, 1], forward[env_ids, 0])
-        self.cmd_world[env_ids, 2] = torch.clip(0.5*wrap_to_pi(self.commands[env_ids, 2] - heading), -1., 1.)
+        heading = torch.atan2(forward[:, 1], forward[:, 0])
+        self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.cmd_world[:, 2] - heading), -1., 1.)
+
+        # # 打印第0个值
+        # print("commands:", self.commands)
+        # print("cmd_world:", self.cmd_world)
+        # print("target_point:", target_point)
+        # print("env_origins:", self.env_origins)
+        # print("base_pos:", self.base_pos)
+        # print("---------------")
 
     def _compute_torques(self, actions):
         """ Compute torques from actions.
@@ -492,11 +505,11 @@ class Go2TerrainRobot(BaseTask):
         obs_scales_distance_x = 1.0 / max(
             abs(float(self.cfg.commands.ranges.target_x[0])),
             abs(float(self.cfg.commands.ranges.target_x[1])),
-        ) * 1.5
+        )
         obs_scales_distance_y = 1.0 / max(
             abs(float(self.cfg.commands.ranges.target_y[0])),
             abs(float(self.cfg.commands.ranges.target_y[1])),
-        ) * 1.5
+        )
         self.obs_distance_scale = torch.tensor(
             [obs_scales_distance_x, obs_scales_distance_y],
             device=self.device,
@@ -847,6 +860,10 @@ class Go2TerrainRobot(BaseTask):
     def _reward_torques(self):
         # Penalize torques
         return torch.sum(torch.square(self.torques), dim=1)
+
+    def _reward_dof_acc(self):
+        # Penalize dof accelerations
+        return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
 
     def _reward_action_rate(self):
         # Penalize changes in actions
