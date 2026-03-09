@@ -38,24 +38,7 @@ class TerrainChanger:
 
         self.last_action = np.zeros((self.total_action_dims,), dtype=np.float32)
 
-        self.min_forward_dist = self.terrain_config['min_forward_dist']
-        self.max_forward_dist = self.terrain_config['max_forward_dist']
-        self.max_lateral = self.terrain_config['max_lateral']
-        self.max_bump_height = self.terrain_config['max_bump_height']
-
-        grid_resolution = self.terrain_size_x / self.ncol
-
-        radius_min = self.terrain_config['radius_min']
-        radius_max = self.terrain_config['radius_max']
-        self.radius_grid_min = radius_min / grid_resolution
-        self.radius_grid_max = radius_max / grid_resolution
-
-        no_change_radius = self.terrain_config['no_change_radius']
-        self.no_change_radius_grid = no_change_radius / grid_resolution
-
-        # Optional params for scripted terrain generation.
-        self.init_bump_radius_m = float(self.terrain_config.get('init_bump_radius_m', 0.2))
-        self.foot_clearance_m = float(self.terrain_config.get('foot_clearance_m', 0.04))
+        self.grid_resolution = self.terrain_size_x / self.ncol
 
         # Cache for plum-blossom pile indices.
         self._pile_regions = {}
@@ -128,14 +111,14 @@ class TerrainChanger:
 
         # mujoco.mj_forward(self.model, self.data)  # 修改地形后不直接做step，step在主逻辑中操作
 
-    def _lift_robot_if_needed(self):
+    def _lift_robot_if_needed(self, foot_clearance_m):
         # Prevent severe penetration when terrain is suddenly raised under the robot.
         x = float(self.data.qpos[0])
         y = float(self.data.qpos[1])
         gx, gy = self._world_to_grid(x, y)
         local_h = float(self.hfield[gx, gy])
         terrain_z = float(self.model.geom_pos[self.geom_id][2]) + float(self.model.hfield_size[self.hfield_id][2]) * local_h
-        min_base_z = terrain_z + self.foot_clearance_m
+        min_base_z = terrain_z + foot_clearance_m
         if float(self.data.qpos[2]) < min_base_z:
             self.data.qpos[2] = min_base_z
             mujoco.mj_forward(self.model, self.data)
@@ -171,16 +154,25 @@ class TerrainChanger:
                 dir_f = np.array([np.cos(yaw), np.sin(yaw)])
 
             # dump 相对坐标圆心[dist, lat]
-            dist = self.min_forward_dist + (cx_norm + 1.0) / 2.0 * (self.max_forward_dist - self.min_forward_dist)
-            lat = cy_norm * self.max_lateral
+            min_forward_dist = self.terrain_config['terrain_action']['min_forward_dist']
+            max_forward_dist = self.terrain_config['terrain_action']['max_forward_dist']
+            max_lateral = self.terrain_config['terrain_action']['max_lateral']
+            max_bump_height = self.terrain_config['terrain_action']['max_bump_height']
+
+            dist = min_forward_dist + (cx_norm + 1.0) / 2.0 * (max_forward_dist - min_forward_dist)
+            lat = cy_norm * max_lateral
             perp = np.array([-dir_f[1], dir_f[0]])
             target_xy = robot_xy + dir_f * dist + perp * lat
             gx, gy = self._world_to_grid(float(target_xy[0]), float(target_xy[1]))
 
+            radius_min = self.terrain_config['terrain_action']['radius_min']
+            radius_max = self.terrain_config['terrain_action']['radius_max']
+            radius_grid_min = radius_min / self.grid_resolution
+            radius_grid_max = radius_max / self.grid_resolution
             # scale radius to configured grid units
-            radius_scaled = (radius + 1.0) / 2.0 * (self.radius_grid_max - self.radius_grid_min) + self.radius_grid_min
+            radius_scaled = (radius + 1.0) / 2.0 * (radius_grid_max - radius_grid_min) + radius_grid_min
             # scale height to configured max
-            height_scaled = float(height) * self.max_bump_height
+            height_scaled = float(height) * max_bump_height
 
             # 保护机器人所在区域不被修改
             robot_gx, robot_gy = self._world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
@@ -211,6 +203,10 @@ class TerrainChanger:
 
     def set_bump(self, gx, gy, radius, height, robot_gx, robot_gy):
 
+        # ['terrain_action']['no_change_radius']
+        no_change_radius = self.terrain_config.get('terrain_action', False).get('no_change_radius', False)
+        no_change_radius_grid = no_change_radius / self.grid_resolution
+
         for row in range(self.nrow):
             for col in range(self.ncol):
 
@@ -225,7 +221,7 @@ class TerrainChanger:
                     dy_r = row - robot_gy
                     dist_robot = np.sqrt(dx_r * dx_r + dy_r * dy_r)
 
-                    if dist_robot < self.no_change_radius_grid:
+                    if no_change_radius and dist_robot < no_change_radius_grid:
                         continue  # 不允许修改
 
                     self.hfield[row, col] = height * np.exp(
@@ -390,6 +386,7 @@ class TerrainChanger:
 
         self._refresh_terrain()
 
+    # TODO 检查是否有问题
     def update_plum_blossom_piles(self, control_list):
         """Control pile heights.
 
@@ -405,11 +402,29 @@ class TerrainChanger:
             r0, r1, c0, c1 = self._pile_regions[key]
             self.hfield[r0:r1, c0:c1] += dh
 
-        self._lift_robot_if_needed()
+        foot_clearance_m = float(terrain_config.get("plum_blossom", 0).get("foot_clearance_m", 0))
+        self._lift_robot_if_needed(foot_clearance_m)
         self._refresh_terrain()
 
 
 if __name__ == "__main__":
+
+    # yaml 读取测试
+    config_file = "terrain_config.yaml"
+    print(f"{os.path.dirname(os.path.realpath(__file__))}/{config_file}")
+    with open(f"{os.path.dirname(os.path.realpath(__file__))}/{config_file}", "r") as f:
+        terrain_config = yaml.load(f, Loader=yaml.FullLoader)
+
+    # 使用get嵌套读取
+    print(terrain_config["x"])
+    print(terrain_config.get("x"))
+    print(terrain_config.get("plum_blossom").get("foot_clearance_m"))
+    print(terrain_config.get(('plum_blossom', 'foot_clearance_m'), 0.04))
+    print(terrain_config.get('1', 0.04))
+    print(terrain_config.get(('1', '2'), 0.04))
+
+    exit()
+
     model = mujoco.MjModel.from_xml_path(f"{os.path.dirname(os.path.realpath(__file__))}/robots/go2/scene_terrain.xml")
     data = mujoco.MjData(model)
 
@@ -429,7 +444,7 @@ if __name__ == "__main__":
     # terrain_changer.run()
 
     # 初始化bumps
-    terrain_changer = TerrainChanger(model, data, action_dims={}, config_file="terrain_config_debug.yaml")
+    terrain_changer = TerrainChanger(model, data, action_dims={}, config_file="terrain_config.yaml")
     bumps_array = []
     for _ in range(100):
         bumps_array.append([np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(-0.2, 0.2), np.random.uniform(0.1, 5)])

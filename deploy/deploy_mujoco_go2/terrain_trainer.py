@@ -4,8 +4,12 @@ import mujoco
 import numpy as np
 import yaml
 from typing import Tuple
-import gymnasium as gym
-from gymnasium.spaces import Box
+try:
+    import gymnasium as gym
+    from gymnasium.spaces import Box
+except ImportError:
+    import gym
+    from gym.spaces import Box
 from deploy.deploy_mujoco_go2.utils import quat_to_rpy, pd_control
 import mujoco.viewer
 import time
@@ -49,8 +53,8 @@ class TerrainTrainer:
         # Terrain setup
         with open(f"{os.path.dirname(os.path.realpath(__file__))}/{terrain_config_file}", "r") as f:
             self.terrain_config = yaml.load(f, Loader=yaml.FullLoader)
-        self.terrain_decimation = int(self.terrain_config["terrain_decimation"])
-        self.terrain_types = self.terrain_config["terrain_types"]
+        self.terrain_decimation = self.terrain_config.get("terrain_action", 0).get("terrain_decimation", 0)
+        self.terrain_types = self.terrain_config.get("terrain_action", 0).get("terrain_types", [])
 
         # per-episode bookkeeping for terrain rewards
         # if repeat_reward is False (default), collision/fall rewards are given only once per episode
@@ -95,9 +99,9 @@ class TerrainTrainer:
         # Use controller's control decimation and PD gains
         self.control_decimation = self.go2_controller.control_decimation
 
-        self.render = self.terrain_config["render"]
-        self.lock_camera = self.terrain_config["lock_camera"]
-        self.realtime_sim = self.terrain_config["realtime_sim"]
+        self.render = self.terrain_config["visualization"]["render"]
+        self.lock_camera = self.terrain_config["visualization"]["lock_camera"]
+        self.realtime_sim = self.terrain_config["visualization"]["realtime_sim"]
         if self.render:
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
             self.viewer.cam.azimuth = 0
@@ -161,6 +165,14 @@ class TerrainTrainer:
     def close_viewer(self):
         if self.render:
             self.viewer.close()
+
+    def start_viewer(self):
+        if self.render:
+            self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+            self.viewer.cam.azimuth = 0
+            self.viewer.cam.elevation = -20
+            self.viewer.cam.distance = 1.5
+            self.viewer.cam.lookat[:] = self.data.qpos[:3]
 
     def step(self, terrain_action):
 
@@ -325,7 +337,7 @@ class TerrainTrainer:
         lin_vel = float(np.linalg.norm(self.data.qvel[:2]))
         quat = self.data.qpos[3:7]
         roll, pitch, _ = quat_to_rpy(quat)
-        target_speed = float(self.terrain_config["target_speed"])
+        target_speed = float(self.terrain_config["event_and_reward"]["target_speed"])
         return base_z, lin_vel, float(roll), float(pitch), target_speed
 
     def _get_ground_height_at_xy(self, x: float, y: float) -> float:
@@ -361,9 +373,9 @@ class TerrainTrainer:
         ground_z = self._get_ground_height_at_xy(x, y)
         base_rel_height = base_z - ground_z
 
-        if base_rel_height < float(self.terrain_config["fall_height_threshold"]):
+        if base_rel_height < float(self.terrain_config["event_and_reward"]["fall_height_threshold"]):
             return True
-        angle_thresh = float(self.terrain_config["fall_angle_threshold"])
+        angle_thresh = float(self.terrain_config["event_and_reward"]["fall_angle_threshold"])
         return abs(roll) > angle_thresh or abs(pitch) > angle_thresh
 
     def _compute_fall_reward(self, fallen: bool, repeat: bool) -> float:
@@ -371,14 +383,14 @@ class TerrainTrainer:
             return 0.0
         if repeat or not self._fallen_reported:
             self._fallen_reported = True
-            return float(self.terrain_config["fall_reward"])
+            return float(self.terrain_config["event_and_reward"]["fall_reward"])
         return 0.0
 
     def _analyze_contacts(self) -> Tuple[bool, bool, bool]:
         collided = False
         base_collision = False
         thigh_collision = False
-        force_thresh = float(self.terrain_config["collision_force_threshold"])
+        force_thresh = float(self.terrain_config["event_and_reward"]["collision_force_threshold"])
 
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
@@ -406,40 +418,40 @@ class TerrainTrainer:
     def _compute_collision_reward(self, collided: bool, base_collision: bool, thigh_collision: bool, repeat: bool) -> float:
         reward = 0.0
         if base_collision and (repeat or not self._collision_reported):
-            reward += float(self.terrain_config["base_collision_reward"])
+            reward += float(self.terrain_config["event_and_reward"]["base_collision_reward"])
             self._collision_reported = True
         if thigh_collision:
-            reward += float(self.terrain_config["thigh_collision_reward"])
+            reward += float(self.terrain_config["event_and_reward"]["thigh_collision_reward"])
         if collided:
-            reward += float(self.terrain_config["collision_reward"])
+            reward += float(self.terrain_config["event_and_reward"]["collision_reward"])
         return reward
 
     def _compute_tilt_reward(self, roll: float, pitch: float) -> Tuple[float, float]:
         tilt = abs(roll) + abs(pitch)
-        reward = float(self.terrain_config["tilt_reward_scale"]) * tilt
+        reward = float(self.terrain_config["event_and_reward"]["tilt_reward_scale"]) * tilt
         return float(tilt), float(reward)
 
     def _compute_speed_reward(self, lin_vel: float, target_speed: float) -> float:
         speed_loss = max(0.0, target_speed - lin_vel)
-        return float(self.terrain_config["speed_reward_scale"]) * speed_loss
+        return float(self.terrain_config["event_and_reward"]["speed_reward_scale"]) * speed_loss
 
     def _compute_stuck_reward(self, lin_vel: float, target_speed: float) -> Tuple[bool, float]:
-        stuck = lin_vel < float(self.terrain_config["stuck_speed_threshold"]) and target_speed > 0.2
+        stuck = lin_vel < float(self.terrain_config["event_and_reward"]["stuck_speed_threshold"]) and target_speed > 0.2
         if not stuck:
             return False, 0.0
-        return True, float(self.terrain_config["stuck_reward"])
+        return True, float(self.terrain_config["event_and_reward"]["stuck_reward"])
 
     def _is_out_of_terrain_edge(self) -> bool:
         """Check whether robot base xy leaves terrain bounds (with optional margin)."""
         x = float(self.data.qpos[0])
         y = float(self.data.qpos[1])
 
-        size_x = float(getattr(self.terrain_changer, "terrain_size_x", self.terrain_config.get("terrain_size_x", 10.0)))
-        size_y = float(getattr(self.terrain_changer, "terrain_size_y", self.terrain_config.get("terrain_size_y", 10.0)))
-        center_x = float(getattr(self.terrain_changer, "terrain_center_x", self.terrain_config.get("terrain_center_x", 0.0)))
-        center_y = float(getattr(self.terrain_changer, "terrain_center_y", self.terrain_config.get("terrain_center_y", 0.0)))
+        size_x = self.terrain_changer.terrain_size_x
+        size_y = self.terrain_changer.terrain_size_y
+        center_x = self.terrain_changer.terrain_center_x
+        center_y = self.terrain_changer.terrain_center_y
 
-        margin = self.terrain_config["terminate_on_terrain_edge"]
+        margin = self.terrain_config["termination"]["terrain_edge_margin"]
 
         half_x = size_x * 0.5 - margin
         half_y = size_y * 0.5 - margin
@@ -449,18 +461,18 @@ class TerrainTrainer:
         return (abs(x - center_x) >= half_x) or (abs(y - center_y) >= half_y)
 
     def _compute_done(self, fallen: bool, base_collision: bool, out_of_terrain_edge: bool) -> bool:
-        if fallen and self.terrain_config["terminate_on_fall"]:
+        if fallen and self.terrain_config["termination"]["terminate_on_fall"]:
             return True
-        if base_collision and self.terrain_config["terminate_on_base_collision"]:
+        if base_collision and self.terrain_config["termination"]["terminate_on_base_collision"]:
             return True
-        if out_of_terrain_edge and self.terrain_config["terminate_on_terrain_edge"]:
+        if out_of_terrain_edge and self.terrain_config["termination"]["terminate_on_terrain_edge"]:
             return True
 
         return False
 
     def compute_terrain_reward(self) -> Tuple[float, dict, bool]:
         reward = 0.0
-        repeat = bool(self.terrain_config["repeat_reward"])
+        repeat = bool(self.terrain_config["event_and_reward"]["repeat_reward"])
 
         base_z, lin_vel, roll, pitch, target_speed = self._collect_motion_state()
 
@@ -517,10 +529,9 @@ class TerrainGymEnv(gym.Env):
     Action: flat terrain action vector in [-1,1]^action_dim
     Reward: terrain reward (collision/fall)
     """
-    def __init__(self, trainer: 'TerrainTrainer', steps_per_terrain: int = None, max_episode_steps: int = 1000):
+    def __init__(self, trainer: 'TerrainTrainer', max_episode_steps: int = 1000):
         super().__init__()
         self.trainer = trainer
-        self.steps_per_terrain = steps_per_terrain or trainer.terrain_decimation
         obs_dim = trainer.get_terrain_observation().shape[0]
         act_dim = trainer.total_action_dims
         self.observation_space = Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
