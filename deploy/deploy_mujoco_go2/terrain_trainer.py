@@ -74,6 +74,24 @@ class TerrainTrainer:
         # Terrain changer helper (owns terrain policy and mapping)
         self.terrain_changer = TerrainChanger(self.model, self.data, action_dims=self.action_dims, config_file=terrain_config_file)
 
+        # Observation config for terrain agent.
+        obs_cfg = self.terrain_config.get("observation", {})
+        self.obs_include_last_action = bool(obs_cfg.get("include_last_action", True))
+        self.obs_include_foot_contacts = bool(obs_cfg.get("include_foot_contacts", True))  # TODO 暂定False，相关功能待验证，也可能不需要
+        self.obs_contact_force_threshold = float(obs_cfg.get("contact_force_threshold", 1.0))
+        local_cfg = obs_cfg.get("local_height_map", {})
+        self.local_map_enabled = bool(local_cfg.get("enabled", True))
+        self.local_map_size_m = float(local_cfg.get("size_m", 1.0))
+        self.local_map_resolution_m = float(local_cfg.get("resolution_m", 0.2))
+        self.local_map_side = max(1, int(round(self.local_map_size_m / max(self.local_map_resolution_m, 1e-6))))
+
+        # Cache body ids for simple foot contact state.
+        self.foot_body_ids = []
+        for body_name in ["FL_calf", "FR_calf", "RL_calf", "RR_calf"]:
+            bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            if bid >= 0:
+                self.foot_body_ids.append(int(bid))
+
         # Use controller's control decimation and PD gains
         self.control_decimation = self.go2_controller.control_decimation
 
@@ -148,24 +166,12 @@ class TerrainTrainer:
 
         self.step_counter += 1
 
-        # --- [步骤 A] 备份当前机器人状态 ---
-        qpos_backup = self.data.qpos.copy()
-        qvel_backup = self.data.qvel.copy()
-        act_backup = self.data.act.copy()
-
         # apply terrain action via TerrainChanger and remember it
         self.terrain_changer.apply_action_vector(terrain_action)
+        self.terrain_changer._refresh_terrain()
 
-        mujoco.mj_setConst(self.model, self.data)
-
-        # --- 还原状态 ---
-        self.data.qpos[:] = qpos_backup
-        self.data.qvel[:] = qvel_backup
-        self.data.act[:] = act_backup
-
-        mujoco.mj_forward(self.model, self.data)
         if self.render:
-            self.viewer.update_hfield(self.terrain_changer.hfield_id)
+            self.viewer.update_hfield(self.terrain_changer.hfield_id)  # TODO 确保修改地形后一定update hfield
             self.viewer.sync()
 
         total_sim_steps = int(self.terrain_decimation * self.control_decimation)
@@ -239,13 +245,77 @@ class TerrainTrainer:
 
         return None, None, float(terrain_reward), done, info
 
+    # TODO 梅花桩相关
+    def set_robot_spawn_pose(self, x=0.0, y=0.0, z=None, yaw=0.0):
+        """Set robot root pose before rollouts (for pile tests and scripted starts)."""
+        self.data.qpos[0] = float(x)
+        self.data.qpos[1] = float(y)
+        if z is not None:
+            self.data.qpos[2] = float(z)
+
+        # roll=pitch=0 quaternion from yaw.
+        cy = np.cos(0.5 * float(yaw))
+        sy = np.sin(0.5 * float(yaw))
+        self.data.qpos[3:7] = np.array([cy, 0.0, 0.0, sy], dtype=np.float64)
+        self.data.qvel[:] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+
+    def _get_foot_contact_flags(self):
+        flags = np.zeros((len(self.foot_body_ids),), dtype=np.float32)
+        if len(self.foot_body_ids) == 0:
+            return flags
+
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            force = np.zeros(6)
+            mujoco.mj_contactForce(self.model, self.data, i, force)
+            if np.linalg.norm(force[:3]) < self.obs_contact_force_threshold:
+                continue
+            b1 = int(self.model.geom_bodyid[contact.geom1])
+            b2 = int(self.model.geom_bodyid[contact.geom2])
+            for j, fb in enumerate(self.foot_body_ids):
+                if b1 == fb or b2 == fb:
+                    flags[j] = 1.0
+        return flags
+
+    def _get_local_height_map_obs(self):
+        if not self.local_map_enabled:
+            return np.zeros((0,), dtype=np.float32)
+
+        cx = float(self.data.qpos[0])
+        cy = float(self.data.qpos[1])
+        center_h = self._get_ground_height_at_xy(cx, cy)
+
+        n = self.local_map_side
+        res = self.local_map_resolution_m
+        start = -0.5 * self.local_map_size_m + 0.5 * res
+        end = 0.5 * self.local_map_size_m - 0.5 * res
+        xs = np.linspace(start, end, n, dtype=np.float32)
+        ys = np.linspace(start, end, n, dtype=np.float32)
+
+        vals = np.zeros((n, n), dtype=np.float32)
+        for iy, oy in enumerate(ys):
+            for ix, ox in enumerate(xs):
+                h = self._get_ground_height_at_xy(cx + float(ox), cy + float(oy))
+                vals[iy, ix] = float(h - center_h)
+        return vals.reshape(-1)
+
     def get_terrain_observation(self):
-        """Return observation for terrain policy: robot-centered observation plus last terrain action."""
-        robot_obs = self.go2_controller.get_observation(self.data)
-        # include previous terrain action as part of observation
-        if self.total_action_dims > 0:
-            return np.concatenate([robot_obs, self.terrain_changer.last_action.astype(np.float32)])
-        return robot_obs
+        """Terrain obs = robot obs + optional foot contacts + optional local map + optional last terrain action."""
+        robot_obs = self.go2_controller.get_observation(self.data).astype(np.float32)
+        chunks = [robot_obs]
+
+        if self.obs_include_foot_contacts:
+            chunks.append(self._get_foot_contact_flags())
+
+        local_map_obs = self._get_local_height_map_obs()
+        if local_map_obs.size > 0:
+            chunks.append(local_map_obs.astype(np.float32))
+
+        if self.obs_include_last_action and self.total_action_dims > 0:
+            chunks.append(self.terrain_changer.last_action.astype(np.float32))
+
+        return np.concatenate(chunks, axis=0)
 
     # ---------- terrain reward helpers ----------
     def _collect_motion_state(self) -> Tuple[float, float, float, float, float]:
@@ -264,7 +334,7 @@ class TerrainTrainer:
 
         size_x = float(self.model.hfield_size[hfield_id][0])  # half-size x
         size_y = float(self.model.hfield_size[hfield_id][1])  # half-size y
-        z_scale = float(self.model.hfield_size[hfield_id][2])
+        z_scale = float(self.model.hfield_size[hfield_id][2])  # TODO 所有涉及到高度的地方都应该乘以z_scale，目前地图设置z_scale=1所以不用乘
 
         center_x = float(self.model.geom_pos[self.terrain_changer.geom_id][0])
         center_y = float(self.model.geom_pos[self.terrain_changer.geom_id][1])
@@ -362,13 +432,12 @@ class TerrainTrainer:
         x = float(self.data.qpos[0])
         y = float(self.data.qpos[1])
 
-        # Prefer TerrainChanger geometry if available; fallback to config defaults.
         size_x = float(getattr(self.terrain_changer, "terrain_size_x", self.terrain_config.get("terrain_size_x", 10.0)))
         size_y = float(getattr(self.terrain_changer, "terrain_size_y", self.terrain_config.get("terrain_size_y", 10.0)))
         center_x = float(getattr(self.terrain_changer, "terrain_center_x", self.terrain_config.get("terrain_center_x", 0.0)))
         center_y = float(getattr(self.terrain_changer, "terrain_center_y", self.terrain_config.get("terrain_center_y", 0.0)))
 
-        margin = 1
+        margin = self.terrain_config["terminate_on_terrain_edge"]
 
         half_x = size_x * 0.5 - margin
         half_y = size_y * 0.5 - margin
@@ -382,7 +451,7 @@ class TerrainTrainer:
             return True
         if base_collision and self.terrain_config["terminate_on_base_collision"]:
             return True
-        if out_of_terrain_edge:
+        if out_of_terrain_edge and self.terrain_config["terminate_on_terrain_edge"]:
             return True
 
         return False
@@ -416,6 +485,11 @@ class TerrainTrainer:
         out_of_terrain_edge = self._is_out_of_terrain_edge()
         done = self._compute_done(fallen, base_collision, out_of_terrain_edge)
 
+        x = float(self.data.qpos[0])
+        y = float(self.data.qpos[1])
+        ground_height = self._get_ground_height_at_xy(x, y)
+        base_rel_height = base_z - ground_height
+
         info = {
             "fallen": fallen,
             "collided": collided,
@@ -425,9 +499,10 @@ class TerrainTrainer:
             "tilt": tilt,
             "speed": lin_vel,
             "base_height": base_z,
-            "ground_height": self._get_ground_height_at_xy(float(self.data.qpos[0]), float(self.data.qpos[1])),
-            "base_rel_height": base_z - self._get_ground_height_at_xy(float(self.data.qpos[0]), float(self.data.qpos[1])),
+            "ground_height": ground_height,
+            "base_rel_height": base_rel_height,
             "out_of_terrain_edge": out_of_terrain_edge,
+            "terrain_obs_dim": int(self.get_terrain_observation().shape[0]),
         }
 
         return reward, info, done
