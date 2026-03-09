@@ -1,12 +1,16 @@
-from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
-from stable_baselines3 import SAC
-from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import BaseCallback
-import matplotlib.pyplot as plt
 import os
-import yaml
+import shutil
+
+import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import yaml
+from stable_baselines3 import SAC
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv
+
+from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
 
 
 class TrainingLoggerCallback(BaseCallback):
@@ -65,10 +69,39 @@ def plot_training(callback, out_dir):
         plt.close()
 
 
+def configure_torch_runtime(cfg: dict):
+    seed = int(cfg.get("seed", 0))
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    deterministic = bool(cfg.get("torch_deterministic", False))
+    cudnn_benchmark = bool(cfg.get("cudnn_benchmark", True))
+    allow_tf32 = bool(cfg.get("allow_tf32", True))
+
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cudnn.benchmark = cudnn_benchmark
+    torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    torch.backends.cudnn.allow_tf32 = allow_tf32
+
+    num_threads = int(cfg.get("torch_num_threads", 0))
+    if num_threads > 0:
+        torch.set_num_threads(num_threads)
+
+
 def train_sac(go2_cfg, terrain_cfg,
               total_timesteps=20000,
               max_episode_steps=35,
-              log_dir="train_terrain_logs"):
+              log_dir="train_terrain_logs",
+              device="auto",
+              learning_rate=3e-4,
+              batch_size=256,
+              buffer_size=1_000_000,
+              learning_starts=100,
+              train_freq=1,
+              gradient_steps=1,
+              tau=0.005,
+              gamma=0.99,
+              seed=0):
 
     def make_env():
         trainer = TerrainTrainer(go2_cfg, terrain_cfg)
@@ -86,7 +119,21 @@ def train_sac(go2_cfg, terrain_cfg,
             "(e.g. ['bump'])."
         )
 
-    model = SAC("MlpPolicy", vec_env, verbose=1)
+    model = SAC(
+        "MlpPolicy",
+        vec_env,
+        verbose=1,
+        device=device,
+        learning_rate=float(learning_rate),
+        batch_size=int(batch_size),
+        buffer_size=int(buffer_size),
+        learning_starts=int(learning_starts),
+        train_freq=int(train_freq),
+        gradient_steps=int(gradient_steps),
+        tau=float(tau),
+        gamma=float(gamma),
+        seed=int(seed),
+    )
 
     callback = TrainingLoggerCallback()
 
@@ -104,6 +151,8 @@ def main():
     with open(f"{current_path}/{train_config_file}", "r", encoding="utf-8") as f:
         train_config = yaml.load(f, Loader=yaml.FullLoader)
 
+    configure_torch_runtime(train_config)
+
     log_dir = f"{current_path}/train_logs/{train_config['log_name']}"
     os.makedirs(log_dir, exist_ok=True)
     terrain_cfg_file = os.path.join(current_path, train_config["terrain_config"])
@@ -116,7 +165,23 @@ def main():
     total_timesteps = train_config['total_timesteps']
     max_episode_steps = train_config['max_episode_steps']
 
-    train_sac(go2_cfg, terrain_cfg, total_timesteps=total_timesteps, max_episode_steps=max_episode_steps, log_dir=log_dir)
+    train_sac(
+        go2_cfg,
+        terrain_cfg,
+        total_timesteps=total_timesteps,
+        max_episode_steps=max_episode_steps,
+        log_dir=log_dir,
+        device=train_config.get("device", "auto"),
+        learning_rate=train_config.get("learning_rate", 3e-4),
+        batch_size=train_config.get("batch_size", 256),
+        buffer_size=train_config.get("buffer_size", 1_000_000),
+        learning_starts=train_config.get("learning_starts", 100),
+        train_freq=train_config.get("train_freq", 1),
+        gradient_steps=train_config.get("gradient_steps", 1),
+        tau=train_config.get("tau", 0.005),
+        gamma=train_config.get("gamma", 0.99),
+        seed=train_config.get("seed", 0),
+    )
 
 
 if __name__ == "__main__":

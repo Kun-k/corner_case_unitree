@@ -25,7 +25,7 @@ terrain_action:
 
 # 可视化配置
 visualization:
-  render: True
+  render: False
   lock_camera: True
   realtime_sim: False
 

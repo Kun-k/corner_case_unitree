@@ -50,7 +50,7 @@ def evaluate_policy(
     current_path = os.path.dirname(os.path.realpath(__file__))
 
     trainer = TerrainTrainer(go2_cfg, terrain_cfg)
-    if render:
+    if not trainer.render and render:
         trainer.render = True
         trainer.start_viewer()
 

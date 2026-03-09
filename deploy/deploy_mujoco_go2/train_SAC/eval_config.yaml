@@ -1,5 +1,5 @@
-#policy: "random"  # random表示随机策略，其余情况下则查找训练好的模型
-policy: "sac_logs_debug"  # random表示随机策略，其余情况下则查找训练好的模型
+policy: "random"  # random表示随机策略，其余情况下则查找训练好的模型
+#policy: "sac_logs_debug"  # random表示随机策略，其余情况下则查找训练好的模型
 
 go2_task: "terrain"
 go2_config: "go2.yaml"
@@ -10,8 +10,10 @@ max_episode_steps: 350
 seed: 42
 
 #log_name: "random_eval_0309"
-log_name: "policy_eval_debug"
+log_name: "random_eval_debug"
+#log_name: "policy_eval_debug"
 
 use_curr_force: False  # 强制使用当前配置
 
 render: False
+
