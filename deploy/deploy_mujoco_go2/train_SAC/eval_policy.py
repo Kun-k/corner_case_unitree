@@ -44,11 +44,16 @@ def evaluate_policy(
     max_episode_steps,
     log_dir,
     seed,
+    render
 ):
 
     current_path = os.path.dirname(os.path.realpath(__file__))
 
     trainer = TerrainTrainer(go2_cfg, terrain_cfg)
+    if render:
+        trainer.render = True
+        trainer.start_viewer()
+
     env = TerrainGymEnv(trainer, max_episode_steps=max_episode_steps)
 
     if model is None:
@@ -188,7 +193,9 @@ def main():
         max_episode_steps = train_config['max_episode_steps']
         seed = 0
 
-    evaluate_policy(model=model, go2_cfg=go2_cfg, terrain_cfg=terrain_cfg, episodes=episodes, max_episode_steps=max_episode_steps, log_dir=log_dir, seed=seed)
+    render = eval_config["render"]
+
+    evaluate_policy(model=model, go2_cfg=go2_cfg, terrain_cfg=terrain_cfg, episodes=episodes, max_episode_steps=max_episode_steps, log_dir=log_dir, seed=seed, render=render)
 
 
 if __name__ == "__main__":
