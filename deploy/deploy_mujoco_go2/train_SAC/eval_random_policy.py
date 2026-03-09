@@ -29,6 +29,7 @@ def _append_csv_row(csv_path, row):
                 "fall_failures",
                 "base_collision_failures",
                 "thigh_collision_failures",
+                "stuck_failures",
             ],
         )
         if write_header:
@@ -66,6 +67,7 @@ def evaluate_random_policy(
         "fall_failures": 0,
         "base_collision_failures": 0,
         "thigh_collision_failures": 0,
+        "stuck_failures": 0,
     }
 
     for ep in range(episodes):
@@ -76,6 +78,7 @@ def evaluate_random_policy(
         has_fall = False
         has_base_collision = False
         has_thigh_collision = False
+        has_stuck = False
 
         for step_idx in range(max_episode_steps):
             action = rng.uniform(-1.0, 1.0, size=env.action_space.shape).astype(np.float32)
@@ -87,6 +90,7 @@ def evaluate_random_policy(
                 "base_collision": bool(info.get("base_collision", False)),
                 "thigh_collision": bool(info.get("thigh_collision", False)),
                 "terrain_reward": float(info.get("terrain_reward", 0.0)),
+                "stuck": bool(info.get("stuck", False)),
             }
 
             transition = {
@@ -104,7 +108,8 @@ def evaluate_random_policy(
             has_fall = has_fall or info_dict["fallen"]
             has_base_collision = has_base_collision or info_dict["base_collision"]
             has_thigh_collision = has_thigh_collision or info_dict["thigh_collision"]
-            has_failure = has_collision or has_fall
+            has_stuck = has_stuck or info_dict["stuck"]
+            has_failure = has_collision or has_fall or has_stuck
 
             obs = next_obs
             if terminated or truncated:
@@ -121,6 +126,8 @@ def evaluate_random_policy(
             summary["base_collision_failures"] += 1
         if has_thigh_collision:
             summary["thigh_collision_failures"] += 1
+        if has_stuck:
+            summary["stuck_failures"] += 1
 
         if has_failure:
             with open(paths["pkl"], "wb") as pf:
