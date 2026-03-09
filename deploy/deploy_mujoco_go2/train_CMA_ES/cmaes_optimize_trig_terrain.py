@@ -1,10 +1,10 @@
-import argparse
 import json
 import math
 import os
 from dataclasses import dataclass
 
 import numpy as np
+import yaml
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer
 
@@ -149,34 +149,27 @@ def evaluate_candidate(trainer, angle_array, max_robot_steps, safe_radius_m, ble
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Optimize trig-terrain params with CMA-ES and run Go2 in Mujoco.")
-    parser.add_argument("--go2-task", type=str, default="terrain", help="Go2 controller task folder")
-    parser.add_argument("--go2-config", type=str, default="go2.yaml", help="Go2 config file name")
-    parser.add_argument("--terrain-config", type=str, default="terrain_config.yaml", help="Terrain trainer config file")
+    current_path = os.path.dirname(os.path.realpath(__file__))
 
-    parser.add_argument("--mode-y", type=int, default=6, help="Trig mode count in y")
-    parser.add_argument("--mode-x", type=int, default=6, help="Trig mode count in x")
-    parser.add_argument("--generations", type=int, default=20)
-    parser.add_argument("--popsize", type=int, default=12)
-    parser.add_argument("--sigma", type=float, default=0.8)
-    parser.add_argument("--seed", type=int, default=0)
+    train_config_file = "train_config.yaml"
+    with open(f"{current_path}/{train_config_file}", "r", encoding="utf-8") as f:
+        train_config = yaml.load(f, Loader=yaml.FullLoader)
 
-    parser.add_argument("--max-robot-steps", type=int, default=350, help="Terrain-agent steps per candidate episode")
-    parser.add_argument("--safe-radius-m", type=float, default=1.0)
-    parser.add_argument("--blend-radius-m", type=float, default=2.0)
+    log_dir = f"{current_path}/logs/{train_config['log_name']}"
+    os.makedirs(log_dir, exist_ok=True)
+    terrain_cfg_file = os.path.join(current_path, train_config["terrain_config"])
+    train_cfg_file = os.path.join(current_path, train_config_file)
+    os.makedirs(log_dir, exist_ok=True)
+    os.system(f"cp {terrain_cfg_file} {log_dir}")
+    os.system(f"cp {train_cfg_file} {log_dir}")
 
-    parser.add_argument("--out-dir", type=str, default="deploy/deploy_mujoco_go2/train_CMA_ES/logs/cmaes_logs")
-    args = parser.parse_args()
-
-    os.makedirs(args.out_dir, exist_ok=True)
-
-    trainer = TerrainTrainer([args.go2_task, args.go2_config], f"train_CMA_ES/{args.terrain_config}")
+    trainer = TerrainTrainer([train_config['go2_task'], train_config['go2_config']], f"train_CMA_ES/{train_config['terrain_config']}")
 
     trainer.init_skip_time = 0
     trainer.init_skip_frame = 10
 
-    dim = 2 * args.mode_y * args.mode_x
-    cma = SimpleCMAES(CMAESConfig(dim=dim, sigma=args.sigma, popsize=args.popsize, seed=args.seed))
+    dim = 2 * train_config['mode_y'] * train_config['mode_x']
+    cma = SimpleCMAES(CMAESConfig(dim=dim, sigma=train_config['sigma'], popsize=train_config['popsize'], seed=train_config['seed']))
 
     best_fitness = float("inf")
     best_reward = -float("inf")
@@ -184,21 +177,21 @@ def main():
     history = []
 
     try:
-        for gen in range(args.generations):
+        for gen in range(train_config['generations']):
             xs, zs = cma.ask()
 
-            fit = np.zeros(args.popsize, dtype=np.float64)
-            rew = np.zeros(args.popsize, dtype=np.float64)
+            fit = np.zeros(train_config['popsize'], dtype=np.float64)
+            rew = np.zeros(train_config['popsize'], dtype=np.float64)
             done_rate = 0
 
-            for i in range(args.popsize):
-                angle_array = decode_params_to_angle_array(xs[i], args.mode_y, args.mode_x)
+            for i in range(train_config['popsize']):
+                angle_array = decode_params_to_angle_array(xs[i], train_config['mode_y'], train_config['mode_x'])
                 f_i, r_i, done_i = evaluate_candidate(
                     trainer,
                     angle_array,
-                    max_robot_steps=args.max_robot_steps,
-                    safe_radius_m=args.safe_radius_m,
-                    blend_radius_m=args.blend_radius_m,
+                    max_robot_steps=train_config['max_robot_steps'],
+                    safe_radius_m=train_config['safe_radius_m'],
+                    blend_radius_m=train_config['blend_radius_m'],
                 )
                 fit[i] = f_i
                 rew[i] = r_i
@@ -210,7 +203,7 @@ def main():
             gen_best_fit = float(fit[gen_best_idx])
             gen_best_rew = float(rew[gen_best_idx])
             gen_mean_rew = float(np.mean(rew))
-            gen_done_rate = float(done_rate / args.popsize)
+            gen_done_rate = float(done_rate / train_config['popsize'])
 
             if gen_best_fit < best_fitness:
                 best_fitness = gen_best_fit
@@ -232,27 +225,27 @@ def main():
             )
 
         if best_x is not None:
-            best_angle_array = decode_params_to_angle_array(best_x, args.mode_y, args.mode_x)
-            np.save(os.path.join(args.out_dir, "best_angle_array.npy"), best_angle_array)
-            np.save(os.path.join(args.out_dir, "best_vector.npy"), best_x)
+            best_angle_array = decode_params_to_angle_array(best_x, train_config['mode_y'], train_config['mode_x'])
+            np.save(os.path.join(log_dir, "best_angle_array.npy"), best_angle_array)
+            np.save(os.path.join(log_dir, "best_vector.npy"), best_x)
 
-        with open(os.path.join(args.out_dir, "history.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(log_dir, "history.json"), "w", encoding="utf-8") as f:
             json.dump(history, f, indent=2)
 
         summary = {
             "best_fitness": best_fitness,
             "best_reward": best_reward,
-            "generations": args.generations,
-            "popsize": args.popsize,
-            "mode_y": args.mode_y,
-            "mode_x": args.mode_x,
-            "safe_radius_m": args.safe_radius_m,
-            "blend_radius_m": args.blend_radius_m,
+            "generations": train_config['generations'],
+            "popsize": train_config['popsize'],
+            "mode_y": train_config['mode_y'],
+            "mode_x": train_config['mode_x'],
+            "safe_radius_m": train_config['safe_radius_m'],
+            "blend_radius_m": train_config['blend_radius_m'],
         }
-        with open(os.path.join(args.out_dir, "summary.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(log_dir, "summary.json"), "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
 
-        print(f"Done. best_reward={best_reward:.3f}, logs in: {args.out_dir}")
+        print(f"Done. best_reward={best_reward:.3f}, logs in: {log_dir}")
 
     finally:
         trainer.close_viewer()
