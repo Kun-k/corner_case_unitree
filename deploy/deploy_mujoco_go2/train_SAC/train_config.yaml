@@ -1,0 +1,8 @@
+go2_task: "terrain"
+go2_config: "go2.yaml"
+terrain_config: "terrain_config.yaml"
+
+total_timesteps: 100
+max_episode_steps: 350
+
+log_name: "sac_logs_debug"

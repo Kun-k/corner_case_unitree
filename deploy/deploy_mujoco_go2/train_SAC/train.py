@@ -5,6 +5,8 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
 import matplotlib.pyplot as plt
 import os
+import yaml
+import numpy as np
 
 
 class TrainingLoggerCallback(BaseCallback):
@@ -66,7 +68,6 @@ def plot_training(callback, out_dir):
 def train_sac(go2_cfg, terrain_cfg,
               total_timesteps=20000,
               max_episode_steps=35,
-              model_path="sac_model.zip",
               log_dir="train_terrain_logs"):
 
     def make_env():
@@ -77,6 +78,14 @@ def train_sac(go2_cfg, terrain_cfg,
 
     vec_env = DummyVecEnv([make_env])
 
+    action_dim = int(np.prod(vec_env.action_space.shape))
+    if action_dim <= 0:
+        raise ValueError(
+            "Terrain action dimension is 0, SAC cannot train with empty action space. "
+            "Please check terrain config and ensure terrain_action.terrain_types includes at least one controllable type "
+            "(e.g. ['bump'])."
+        )
+
     model = SAC("MlpPolicy", vec_env, verbose=1)
 
     callback = TrainingLoggerCallback()
@@ -84,17 +93,31 @@ def train_sac(go2_cfg, terrain_cfg,
     model.learn(total_timesteps=total_timesteps,
                 callback=callback)
 
-    model.save(model_path)
+    model.save(os.path.join(log_dir, "model.zip"))
 
     plot_training(callback, log_dir)
 
 
+def main():
+    current_path = os.path.dirname(os.path.abspath(__file__))
+    train_config_file = "train_config.yaml"
+    with open(f"{current_path}/{train_config_file}", "r", encoding="utf-8") as f:
+        train_config = yaml.load(f, Loader=yaml.FullLoader)
+
+    log_dir = f"{current_path}/train_logs/{train_config['log_name']}"
+    os.makedirs(log_dir, exist_ok=True)
+    terrain_cfg_file = os.path.join(current_path, train_config["terrain_config"])
+    train_cfg_file = os.path.join(current_path, train_config_file)
+    os.system(f"cp {terrain_cfg_file} {log_dir}")
+    os.system(f"cp {train_cfg_file} {log_dir}")
+
+    go2_cfg = [train_config['go2_task'], train_config['go2_config']]
+    terrain_cfg = f"train_SAC/{train_config['terrain_config']}"
+    total_timesteps = train_config['total_timesteps']
+    max_episode_steps = train_config['max_episode_steps']
+
+    train_sac(go2_cfg, terrain_cfg, total_timesteps=total_timesteps, max_episode_steps=max_episode_steps, log_dir=log_dir)
+
+
 if __name__ == "__main__":
-    # TODO 参数化
-    # TODO 绘图
-    go2_cfg = ["terrain", "go2.yaml"]
-    terrain_cfg = "train_SAC/terrain_config.yaml"
-    total_timesteps = 20000
-    max_episode_steps = 350
-    model_path = "sac_model.zip"
-    train_sac(go2_cfg, terrain_cfg, total_timesteps=total_timesteps, max_episode_steps=max_episode_steps, model_path=model_path, log_dir="train_terrain_logs")
+    main()

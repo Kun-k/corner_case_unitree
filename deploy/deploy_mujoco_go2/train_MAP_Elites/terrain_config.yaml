@@ -5,7 +5,7 @@ visualization:
 
 event_and_reward:
   # ===== 摔倒 =====
-  fall_height_threshold: 0.15
+  fall_height_threshold: 0.2
   fall_angle_threshold: 1.3
   fall_reward: 10.0
 
@@ -32,4 +32,4 @@ termination:
   terminate_on_fall: True
   terminate_on_base_collision: False
   terminate_on_terrain_edge: True
-  terrain_edge_margin: 1.0
+  terrain_edge_margin: 1
