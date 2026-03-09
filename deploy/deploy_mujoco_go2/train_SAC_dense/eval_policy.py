@@ -54,8 +54,8 @@ def evaluate_policy(
     paths = _build_log_paths(logs_subdir)
 
     current_path = os.path.dirname(os.path.realpath(__file__))
-    go2_cfg_file = os.path.join(current_path, "../", go2_cfg[0], go2_cfg[1])
-    terrain_cfg_file = os.path.join("../", terrain_cfg)
+    go2_cfg_file = os.path.join(current_path, "../", go2_cfg[0], "configs", go2_cfg[1])
+    terrain_cfg_file = os.path.join(current_path, "../", terrain_cfg)
     # 复制文件到logs
     os.makedirs(paths["log_dir"], exist_ok=True)
     os.system(f"cp {go2_cfg_file} {paths['log_dir']}")
