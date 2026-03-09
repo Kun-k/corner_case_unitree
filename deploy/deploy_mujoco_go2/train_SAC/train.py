@@ -4,6 +4,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
 import matplotlib.pyplot as plt
+import os
 
 
 class TrainingLoggerCallback(BaseCallback):
@@ -33,7 +34,8 @@ class TrainingLoggerCallback(BaseCallback):
         return True
 
 
-def plot_training(callback):
+def plot_training(callback, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
 
     plt.figure()
     plt.plot(callback.episode_rewards)
@@ -41,27 +43,31 @@ def plot_training(callback):
     plt.xlabel("Episode")
     plt.ylabel("Reward")
     plt.grid()
-    plt.show()
+    plt.savefig(os.path.join(out_dir, "episode_reward.png"), dpi=140)
+    plt.close()
 
     if len(callback.actor_losses) > 0:
         plt.figure()
         plt.plot(callback.actor_losses)
         plt.title("Actor Loss")
         plt.grid()
-        plt.show()
+        plt.savefig(os.path.join(out_dir, "actor_loss.png"), dpi=140)
+        plt.close()
 
     if len(callback.critic_losses) > 0:
         plt.figure()
         plt.plot(callback.critic_losses)
         plt.title("Critic Loss")
         plt.grid()
-        plt.show()
+        plt.savefig(os.path.join(out_dir, "critic_loss.png"), dpi=140)
+        plt.close()
 
 
 def train_sac(go2_cfg, terrain_cfg,
               total_timesteps=20000,
               max_episode_steps=35,
-              model_path="sac_model.zip"):
+              model_path="sac_model.zip",
+              log_dir="train_terrain_logs"):
 
     def make_env():
         trainer = TerrainTrainer(go2_cfg, terrain_cfg)
@@ -80,7 +86,7 @@ def train_sac(go2_cfg, terrain_cfg,
 
     model.save(model_path)
 
-    plot_training(callback)
+    plot_training(callback, log_dir)
 
 
 if __name__ == "__main__":
@@ -91,4 +97,4 @@ if __name__ == "__main__":
     total_timesteps = 20000
     max_episode_steps = 350
     model_path = "sac_model.zip"
-    train_sac(go2_cfg, terrain_cfg, total_timesteps=total_timesteps, max_episode_steps=max_episode_steps, model_path=model_path)
+    train_sac(go2_cfg, terrain_cfg, total_timesteps=total_timesteps, max_episode_steps=max_episode_steps, model_path=model_path, log_dir="train_terrain_logs")
