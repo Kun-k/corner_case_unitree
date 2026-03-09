@@ -1,15 +1,13 @@
-import json
 import os
 import csv
 import pickle
 import numpy as np
 from stable_baselines3 import SAC
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
+import yaml
 
 
-def _build_log_paths(logs_subdir):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    log_dir = os.path.join(script_dir, logs_subdir)
+def _build_log_paths(log_dir):
     os.makedirs(log_dir, exist_ok=True)
     return {
         "log_dir": log_dir,
@@ -39,21 +37,32 @@ def _append_csv_row(csv_path, row):
 
 
 def evaluate_policy(
-    model_path,
+    model,
     go2_cfg,
     terrain_cfg,
-    episodes=20,
-    max_episode_steps=350,
-    logs_subdir="logs/default",
+    episodes,
+    max_episode_steps,
+    log_dir,
+    seed,
+    render
 ):
 
-    trainer = TerrainTrainer(go2_cfg, terrain_cfg)
-    env = TerrainGymEnv(trainer, max_episode_steps=max_episode_steps)
-    model = SAC.load(model_path)
-
-    paths = _build_log_paths(logs_subdir)
-
     current_path = os.path.dirname(os.path.realpath(__file__))
+
+    trainer = TerrainTrainer(go2_cfg, terrain_cfg)
+    if not trainer.render and render:
+        trainer.render = True
+        trainer.start_viewer()
+
+    env = TerrainGymEnv(trainer, max_episode_steps=max_episode_steps)
+
+    if model is None:
+        rng = np.random.default_rng(seed)
+    else:
+        rng = None
+
+    paths = _build_log_paths(log_dir)
+
     go2_cfg_file = os.path.join(current_path, "../", go2_cfg[0], "configs", go2_cfg[1])
     terrain_cfg_file = os.path.join(current_path, "../", terrain_cfg)
     # 复制文件到logs
@@ -82,7 +91,10 @@ def evaluate_policy(
         has_stuck = False
 
         for step_idx in range(max_episode_steps):
-            action, _ = model.predict(obs, deterministic=True)
+            if model is None:
+                action = rng.uniform(-1.0, 1.0, size=env.action_space.shape).astype(np.float32)
+            else:
+                action, _ = model.predict(obs, deterministic=True)
             next_obs, reward, terminated, truncated, info = env.step(action)
 
             info_dict = {
@@ -142,12 +154,49 @@ def evaluate_policy(
     trainer.close_viewer()
 
 
+def main():
+    current_path = os.path.dirname(os.path.abspath(__file__))
+    eval_config_file = "eval_config.yaml"
+    with open(f"{current_path}/{eval_config_file}", "r", encoding="utf-8") as f:
+        eval_config = yaml.load(f, Loader=yaml.FullLoader)
+
+    current_path = os.path.dirname(os.path.realpath(__file__))
+    log_dir = os.path.join(current_path, "eval_logs", eval_config["log_name"])
+
+    policy = eval_config['policy']
+
+    if policy == "random":
+        print("Evaluating random policy...")
+        model = None
+    else:
+        print(f"Evaluating policy from {policy}...")
+        model_path = str(os.path.join(current_path, "train_logs", policy, "model.zip"))
+        model = SAC.load(model_path)
+
+    if policy == "random" or eval_config["use_curr_force"]:
+        go2_cfg = [eval_config['go2_task'], eval_config['go2_config']]
+        terrain_cfg = f"train_SAC_dense/{eval_config['terrain_config']}"
+        episodes = eval_config['episodes']
+        max_episode_steps = eval_config['max_episode_steps']
+        seed = eval_config['seed']
+    else:
+        current_path = os.path.dirname(os.path.realpath(__file__))
+        train_log_dir = os.path.join(current_path, "train_logs", policy)
+        train_config_file = os.path.join(train_log_dir, "train_config.yaml")
+
+        with open(train_config_file, "r", encoding="utf-8") as f:
+            train_config = yaml.load(f, Loader=yaml.FullLoader)
+
+        go2_cfg = [train_config['go2_task'], train_config['go2_config']]
+        terrain_cfg = f"train_SAC_dense/train_logs/{policy}/terrain_config.yaml"
+        episodes = eval_config['episodes']
+        max_episode_steps = train_config['max_episode_steps']
+        seed = 0
+
+    render = eval_config["render"]
+
+    evaluate_policy(model=model, go2_cfg=go2_cfg, terrain_cfg=terrain_cfg, episodes=episodes, max_episode_steps=max_episode_steps, log_dir=log_dir, seed=seed, render=render)
+
+
 if __name__ == "__main__":
-    evaluate_policy(
-        model_path="sac_dense_model.zip",
-        go2_cfg=["terrain", "go2.yaml"],
-        terrain_cfg="train_SAC_dense/terrain_config.yaml",
-        episodes=10,
-        max_episode_steps=350,
-        logs_subdir="logs/sac_dense_eval",
-    )
+    main()
