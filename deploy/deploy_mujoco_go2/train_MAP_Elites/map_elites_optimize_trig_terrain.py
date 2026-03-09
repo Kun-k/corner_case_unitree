@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer
+import yaml
 
 
 @dataclass
@@ -173,77 +174,61 @@ def export_archive(archive, mode_y, mode_x, out_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MAP-Elites search for trig terrain parameters.")
-    parser.add_argument("--go2-task", type=str, default="terrain", help="Go2 controller task folder")
-    parser.add_argument("--go2-config", type=str, default="go2.yaml", help="Go2 config file name")
-    parser.add_argument("--terrain-config", type=str, default="terrain_config.yaml", help="Terrain trainer config file")
+    current_path = os.path.dirname(os.path.realpath(__file__))
 
-    parser.add_argument("--mode-y", type=int, default=10)
-    parser.add_argument("--mode-x", type=int, default=10)
-    parser.add_argument("--iterations", type=int, default=300)
-    parser.add_argument("--seed", type=int, default=0)
+    train_config_file = "train_config.yaml"
+    with open(f"{current_path}/{train_config_file}", "r", encoding="utf-8") as f:
+        train_config = yaml.load(f, Loader=yaml.FullLoader)
 
-    parser.add_argument("--max-robot-steps", type=int, default=350)
-    parser.add_argument("--safe-radius-m", type=float, default=1.0)
-    parser.add_argument("--blend-radius-m", type=float, default=2.0)
+    log_dir = f"{current_path}/logs/{train_config['log_name']}"
+    os.makedirs(log_dir, exist_ok=True)
+    terrain_cfg_file = os.path.join(current_path, train_config["terrain_config"])
+    train_cfg_file = os.path.join(current_path, train_config_file)
+    os.system(f"cp {terrain_cfg_file} {log_dir}")
+    os.system(f"cp {train_cfg_file} {log_dir}")
 
-    parser.add_argument("--bins-x", type=int, default=20)
-    parser.add_argument("--bins-y", type=int, default=20)
-    parser.add_argument("--desc-min-x", type=float, default=0.0)
-    parser.add_argument("--desc-max-x", type=float, default=0.2)
-    parser.add_argument("--desc-min-y", type=float, default=0.0)
-    parser.add_argument("--desc-max-y", type=float, default=0.3)
+    rng = np.random.RandomState(train_config['seed'])
 
-    parser.add_argument("--init-random-ratio", type=float, default=0.35)
-    parser.add_argument("--sigma-theta", type=float, default=0.35)
-    parser.add_argument("--sigma-alt", type=float, default=0.45)
+    trainer = TerrainTrainer([train_config['go2_task'], train_config['go2_config']], f"train_MAP_Elites/{train_config['terrain_config']}")
 
-    parser.add_argument("--save-every", type=int, default=25)
-    parser.add_argument("--out-dir", type=str, default="deploy/deploy_mujoco_go2/train_MAP_Elites/logs/map_elites_logs")
-    args = parser.parse_args()
-
-    os.makedirs(args.out_dir, exist_ok=True)
-    rng = np.random.RandomState(args.seed)
-
-    trainer = TerrainTrainer([args.go2_task, args.go2_config], f"train_MAP_Elites/{args.terrain_config}")
     trainer.init_skip_time = 0
     trainer.init_skip_frame = 10
 
-    dim = 2 * args.mode_y * args.mode_x
+    dim = 2 * train_config['mode_y'] * train_config['mode_x']
     archive = MAPElitesArchive(
         MAPElitesConfig(
             dim=dim,
-            bins_x=args.bins_x,
-            bins_y=args.bins_y,
-            desc_min_x=args.desc_min_x,
-            desc_max_x=args.desc_max_x,
-            desc_min_y=args.desc_min_y,
-            desc_max_y=args.desc_max_y,
-            seed=args.seed,
+            bins_x=train_config['bins_x'],
+            bins_y=train_config['bins_y'],
+            desc_min_x=train_config['desc_min_x'],
+            desc_max_x=train_config['desc_max_x'],
+            desc_min_y=train_config['desc_min_y'],
+            desc_max_y=train_config['desc_max_y'],
+            seed=train_config['seed'],
         )
     )
 
     history = []
 
     try:
-        for it in range(args.iterations):
+        for it in range(train_config['iterations']):
             elite = archive.random_elite()
-            use_random = (elite is None) or (rng.rand() < args.init_random_ratio)
+            use_random = (elite is None) or (rng.rand() < train_config['init_random_ratio'])
 
             if use_random:
-                x = sample_random_vector(rng, args.mode_y, args.mode_x)
+                x = sample_random_vector(rng, train_config['mode_y'], train_config['mode_x'])
                 parent_bin = None
             else:
                 parent, parent_bin = elite
-                x = mutate_vector(rng, parent, args.mode_y, args.mode_x, args.sigma_theta, args.sigma_alt)
+                x = mutate_vector(rng, parent, train_config['mode_y'], train_config['mode_x'], train_config['sigma_theta'], train_config['sigma_alt'])
 
-            angle_array = decode_params_to_angle_array(x, args.mode_y, args.mode_x)
+            angle_array = decode_params_to_angle_array(x, train_config['mode_y'], train_config['mode_x'])
             reward, descriptor, done = evaluate_candidate(
                 trainer,
                 angle_array,
-                max_robot_steps=args.max_robot_steps,
-                safe_radius_m=args.safe_radius_m,
-                blend_radius_m=args.blend_radius_m,
+                max_robot_steps=train_config['max_robot_steps'],
+                safe_radius_m=train_config['safe_radius_m'],
+                blend_radius_m=train_config['blend_radius_m'],
             )
 
             inserted, cell = archive.add(x, reward, descriptor, done)
@@ -267,30 +252,30 @@ def main():
                 f"inserted={inserted} coverage={archive.coverage():.3f} qd={archive.qd_score():.3f}"
             )
 
-            if (it + 1) % args.save_every == 0:
-                export_archive(archive, args.mode_y, args.mode_x, args.out_dir)
-                with open(os.path.join(args.out_dir, "history.json"), "w", encoding="utf-8") as f:
+            if (it + 1) % train_config['save_every'] == 0:
+                export_archive(archive, train_config['mode_y'], train_config['mode_x'], log_dir)
+                with open(os.path.join(log_dir, "history.json"), "w", encoding="utf-8") as f:
                     json.dump(history, f, indent=2)
 
-        export_archive(archive, args.mode_y, args.mode_x, args.out_dir)
+        export_archive(archive, train_config['mode_y'], train_config['mode_x'], log_dir)
 
         summary = {
-            "iterations": args.iterations,
+            "iterations": train_config['iterations'],
             "coverage": archive.coverage(),
             "qd_score": archive.qd_score(),
-            "mode_y": args.mode_y,
-            "mode_x": args.mode_x,
-            "bins_x": args.bins_x,
-            "bins_y": args.bins_y,
+            "mode_y": train_config['mode_y'],
+            "mode_x": train_config['mode_x'],
+            "bins_x": train_config['bins_x'],
+            "bins_y": train_config['bins_y'],
             # "best": archive.best(),
         }
 
-        with open(os.path.join(args.out_dir, "history.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(log_dir, "history.json"), "w", encoding="utf-8") as f:
             json.dump(history, f, indent=2)
-        with open(os.path.join(args.out_dir, "summary.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(log_dir, "summary.json"), "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
 
-        print(f"Done. coverage={archive.coverage():.3f}, qd_score={archive.qd_score():.3f}, logs={args.out_dir}")
+        print(f"Done. coverage={archive.coverage():.3f}, qd_score={archive.qd_score():.3f}, logs={log_dir}")
 
     finally:
         trainer.close_viewer()

@@ -7,7 +7,7 @@ from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer
 import argparse
 
 
-if __name__ == "__main__":
+def main():
 
     args = argparse.ArgumentParser()
     args.add_argument("--log_name", type=str, default="cmase_logs")
@@ -17,13 +17,9 @@ if __name__ == "__main__":
     log_dir = os.path.join(current_path, "logs", argument.log_name)
 
     train_config_file = os.path.join(log_dir, "train_config.yaml")
-    terrain_config_file = os.path.join(log_dir, "terrain_config.yaml")
-    
+
     with open(train_config_file, "r", encoding="utf-8") as f:
         train_config = yaml.load(f, Loader=yaml.FullLoader)
-        
-    with open(terrain_config_file, "r", encoding="utf-8") as f:
-        terrain_config = yaml.load(f, Loader=yaml.FullLoader)
 
     go2_cfg = [train_config['go2_task'], train_config['go2_config']]
     trainer = TerrainTrainer(go2_cfg, f"train_CMA_ES/logs/{argument.log_name}/terrain_config.yaml")
@@ -61,9 +57,9 @@ if __name__ == "__main__":
         if done:
             break
 
-    # maximize reward -> CMA-ES minimization fitness
-    fitness = -total_reward
-
-    print("Total reward: ", total_reward)
-
+    print(f"Total reward: {total_reward:.3f}, done={done}")
     trainer.close_viewer()
+
+
+if __name__ == "__main__":
+    main()

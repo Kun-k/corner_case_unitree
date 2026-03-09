@@ -159,7 +159,6 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     terrain_cfg_file = os.path.join(current_path, train_config["terrain_config"])
     train_cfg_file = os.path.join(current_path, train_config_file)
-    os.makedirs(log_dir, exist_ok=True)
     os.system(f"cp {terrain_cfg_file} {log_dir}")
     os.system(f"cp {train_cfg_file} {log_dir}")
 
