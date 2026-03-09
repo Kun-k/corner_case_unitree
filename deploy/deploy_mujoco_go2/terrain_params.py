@@ -12,7 +12,6 @@ class TerrainChanger:
         # load default config from yaml on disk
         with open(f"{os.path.dirname(os.path.realpath(__file__))}/{config_file}", "r") as f:
             self.terrain_config = yaml.load(f, Loader=yaml.FullLoader)
-        self.config_file = config_file
 
         self.hfield_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, "terrain_hfield")
         self.nrow, self.ncol = model.hfield_nrow[self.hfield_id], model.hfield_ncol[self.hfield_id]
@@ -54,6 +53,14 @@ class TerrainChanger:
         no_change_radius = self.terrain_config['no_change_radius']
         self.no_change_radius_grid = no_change_radius / grid_resolution
 
+        # Optional params for scripted terrain generation.
+        self.init_bump_radius_m = float(self.terrain_config.get('init_bump_radius_m', 0.2))
+        self.foot_clearance_m = float(self.terrain_config.get('foot_clearance_m', 0.04))
+
+        # Cache for plum-blossom pile indices.
+        self._pile_regions = {}
+        self._pile_shape = (0, 0)
+
     def reset(self, mujoco_data):
         self.data = mujoco_data
         self.model.hfield_data[:] = self.original_hfield
@@ -93,6 +100,45 @@ class TerrainChanger:
         grid_x = int((x - self.terrain_center_x + self.terrain_size_x / 2) / self.terrain_size_x * self.ncol)
         grid_y = int((y - self.terrain_center_y + self.terrain_size_y / 2) / self.terrain_size_y * self.nrow)
         return np.clip(grid_x, 0, self.nrow - 1), np.clip(grid_y, 0, self.ncol - 1)
+
+    def _norm01_to_world(self, x01, y01):
+        x01 = float(np.clip(x01, 0.0, 1.0))
+        y01 = float(np.clip(y01, 0.0, 1.0))
+        x = self.terrain_center_x - self.terrain_size_x * 0.5 + x01 * self.terrain_size_x
+        y = self.terrain_center_y - self.terrain_size_y * 0.5 + y01 * self.terrain_size_y
+        return float(x), float(y)
+
+    def _grid_resolution_xy(self):
+        grid_res_x = self.terrain_size_x / float(self.ncol)
+        grid_res_y = self.terrain_size_y / float(self.nrow)
+        return float(grid_res_x), float(grid_res_y)
+
+    def _refresh_terrain(self):
+        # --- [步骤 A] 备份当前机器人状态 ---
+        qpos_backup = self.data.qpos.copy()
+        qvel_backup = self.data.qvel.copy()
+        act_backup = self.data.act.copy()
+
+        mujoco.mj_setConst(self.model, self.data)
+
+        # --- 还原状态 ---
+        self.data.qpos[:] = qpos_backup
+        self.data.qvel[:] = qvel_backup
+        self.data.act[:] = act_backup
+
+        # mujoco.mj_forward(self.model, self.data)  # 修改地形后不直接做step，step在主逻辑中操作
+
+    def _lift_robot_if_needed(self):
+        # Prevent severe penetration when terrain is suddenly raised under the robot.
+        x = float(self.data.qpos[0])
+        y = float(self.data.qpos[1])
+        gx, gy = self._world_to_grid(x, y)
+        local_h = float(self.hfield[gx, gy])
+        terrain_z = float(self.model.geom_pos[self.geom_id][2]) + float(self.model.hfield_size[self.hfield_id][2]) * local_h
+        min_base_z = terrain_z + self.foot_clearance_m
+        if float(self.data.qpos[2]) < min_base_z:
+            self.data.qpos[2] = min_base_z
+            mujoco.mj_forward(self.model, self.data)
 
     def apply_action_vector(self, action):
         """
@@ -194,7 +240,8 @@ class TerrainChanger:
         geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "terrain")
         self.model.geom_solref[geom_id] = np.array([solref, 1.0])
 
-    def enforce_safe_spawn_area(self, center_world=(0.0, 0.0), safe_radius_m=1, blend_radius_m=1.0, target_height=0.0):
+    # TODO 检查有没有多余的调用
+    def enforce_safe_spawn_area(self, center_world=(0.0, 0.0), safe_radius_m=1.0, blend_radius_m=1.0, target_height=0.0):
         """
         Make a safe spawn area around center_world with smooth transition:
         - r <= safe_radius_m: fully flattened to target_height
@@ -222,11 +269,47 @@ class TerrainChanger:
         w = t * t * (3.0 - 2.0 * t)
 
         self.hfield[:, :] = (1.0 - w) * target_height + w * self.hfield[:, :]
-        self.model.hfield_data[:] = self.hfield.reshape(-1)
+        self._refresh_terrain()
 
-    def generate_bumps_terrain(self, bumps_array, safe_pos, safe_radius):
-        ...
+    # TODO 初始化速度很慢
+    def generate_bumps_terrain(self, bumps_array, safe_pos=(0.0, 0.0), safe_radius=0):
+        """Initialize terrain from a bumps list.
 
+        bumps_array format per item:
+          (x01, y01, h) or (x01, y01, h, radius_m)
+        where x01/y01 are normalized in [0,1].
+        """
+        self.hfield[:, :] = 0.0
+        grid_res_x, grid_res_y = self._grid_resolution_xy()
+        grid_res = 0.5 * (grid_res_x + grid_res_y)
+
+        for item in bumps_array:
+            print(item)
+            x01, y01, h_m, radius_m = float(item[0]), float(item[1]), float(item[2]), float(item[3])
+            wx, wy = self._norm01_to_world(x01, y01)
+            gx, gy = self._world_to_grid(wx, wy)
+            radius_grid = max(1.0, radius_m / max(grid_res, 1e-8))
+
+            for row in range(self.nrow):
+                for col in range(self.ncol):
+                    dx = col - gy
+                    dy = row - gx
+                    dist = np.sqrt(dx * dx + dy * dy)
+                    if dist > radius_grid:
+                        continue
+                    bump_h = h_m * np.exp(-dist * dist / (2.0 * radius_grid * radius_grid))
+                    # Keep larger height if multiple bumps overlap.
+                    self.hfield[row, col] = max(self.hfield[row, col], bump_h)
+
+        self.enforce_safe_spawn_area(
+            center_world=safe_pos,
+            safe_radius_m=float(safe_radius),
+            blend_radius_m=max(0.2, float(safe_radius)),
+            target_height=0.0,
+        )
+        self._refresh_terrain()
+
+    # TODO 后续考虑把三角函数组合的参数中，xy位置也可控（但是参数也会变多）
     def generate_trig_terrain(self, angle_array):
         angle_array = np.array(angle_array)
 
@@ -263,9 +346,67 @@ class TerrainChanger:
 
         # Write back to hfield.
         self.hfield[:, :] = terrain
-        self.model.hfield_data[:] = self.hfield.reshape(-1)
+        self._refresh_terrain()
 
-        return terrain
+    def generate_plum_blossom_piles(self, num_x, num_y, center_world=(0.0, 0.0), base_height=0.1, pile_size_m=0.08, gap_m=0.01):
+        """Generate rectangular plum-blossom piles and cache each pile region.
+
+        num_x/num_y: pile count on x/y directions.
+        center_world: world-space center of pile field.
+        base_height: pile top height in hfield units.
+        """
+        num_x = int(max(1, num_x))
+        num_y = int(max(1, num_y))
+        base_height = float(base_height)
+
+        self.hfield[:, :] = 0.0
+        self._pile_regions = {}
+        self._pile_shape = (num_x, num_y)
+
+        grid_res_x, grid_res_y = self._grid_resolution_xy()
+        pile_w = max(1, int(round(float(pile_size_m) / max(grid_res_x, 1e-8))))
+        pile_h = max(1, int(round(float(pile_size_m) / max(grid_res_y, 1e-8))))
+        gap_x = max(1, int(round(float(gap_m) / max(grid_res_x, 1e-8))))
+        gap_y = max(1, int(round(float(gap_m) / max(grid_res_y, 1e-8))))
+
+        cx, cy = self._world_to_grid(float(center_world[0]), float(center_world[1]))
+        total_w = num_x * pile_w + (num_x - 1) * gap_x
+        total_h = num_y * pile_h + (num_y - 1) * gap_y
+        start_row = int(cx - total_h // 2)
+        start_col = int(cy - total_w // 2)
+
+        for iy in range(num_y):
+            for ix in range(num_x):
+                r0 = start_row + iy * (pile_h + gap_y)
+                c0 = start_col + ix * (pile_w + gap_x)
+                r1 = int(np.clip(r0 + pile_h, 0, self.nrow))
+                c1 = int(np.clip(c0 + pile_w, 0, self.ncol))
+                r0 = int(np.clip(r0, 0, self.nrow))
+                c0 = int(np.clip(c0, 0, self.ncol))
+                if r1 <= r0 or c1 <= c0:
+                    continue
+                self.hfield[r0:r1, c0:c1] = base_height
+                self._pile_regions[(ix, iy)] = (r0, r1, c0, c1)
+
+        self._refresh_terrain()
+
+    def update_plum_blossom_piles(self, control_list):
+        """Control pile heights.
+
+        control_list item format: (ix, iy, delta_h)
+        """
+        for item in control_list:
+            if len(item) != 3:
+                continue
+            ix, iy, dh = int(item[0]), int(item[1]), float(item[2])
+            key = (ix, iy)
+            if key not in self._pile_regions:
+                continue
+            r0, r1, c0, c1 = self._pile_regions[key]
+            self.hfield[r0:r1, c0:c1] += dh
+
+        self._lift_robot_if_needed()
+        self._refresh_terrain()
 
 
 if __name__ == "__main__":
@@ -277,12 +418,20 @@ if __name__ == "__main__":
     # terrain_changer.run()
 
     # 三角函数组合
-    terrain_changer = TerrainChanger(model, data, action_dims={}, config_file="terrain_config.yaml")
-    angle_array = []
-    for i in range(10):
-        angle_array.append([])
-        for j in range(10):
-            angle_array[i].append([np.random.uniform(0, 2 * np.pi), np.random.uniform(-1, 1)])
-    terrain_changer.generate_trig_terrain(angle_array)
-    terrain_changer.enforce_safe_spawn_area()
+    # terrain_changer = TerrainChanger(model, data, action_dims={}, config_file="terrain_config.yaml")
+    # angle_array = []
+    # for i in range(10):
+    #     angle_array.append([])
+    #     for j in range(10):
+    #         angle_array[i].append([np.random.uniform(0, 2 * np.pi), np.random.uniform(-1, 1)])
+    # terrain_changer.generate_trig_terrain(angle_array)
+    # terrain_changer.enforce_safe_spawn_area()
+    # terrain_changer.run()
+
+    # 初始化bumps
+    terrain_changer = TerrainChanger(model, data, action_dims={}, config_file="terrain_config_debug.yaml")
+    bumps_array = []
+    for _ in range(100):
+        bumps_array.append([np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(-0.2, 0.2), np.random.uniform(0.1, 5)])
+    terrain_changer.generate_bumps_terrain(bumps_array)
     terrain_changer.run()
