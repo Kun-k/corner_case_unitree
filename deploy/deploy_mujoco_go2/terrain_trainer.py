@@ -207,7 +207,9 @@ class TerrainTrainer:
         info = {'terrain_reward': float(terrain_reward), **terrain_info}
         # done = False  # TODO 是否需要根据fall和collision判断
 
-        print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
+        # print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
+        if terrain_reward != 0.0:
+            print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}, info: {terrain_info}")
 
         return next_terrain_obs, np.asarray(terrain_action, dtype=np.float32), float(terrain_reward), done, info
 
@@ -240,8 +242,8 @@ class TerrainTrainer:
 
         info = {'terrain_reward': float(terrain_reward), **terrain_info}
 
-        print(
-            f"robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
+        # print(
+        #     f"robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
 
         return None, None, float(terrain_reward), done, info
 
