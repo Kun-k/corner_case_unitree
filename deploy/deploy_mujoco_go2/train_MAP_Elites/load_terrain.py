@@ -12,7 +12,7 @@ def main():
     parser.add_argument(
         "--angle-array",
         type=str,
-        default="deploy/deploy_mujoco_go2/train_MAP_Elites/map_elites_logs/best_angle_array.npy",
+        default="deploy/deploy_mujoco_go2/train_MAP_Elites/logs/map_elites_logs_1/best_angle_array.npy",
     )
     parser.add_argument("--max-robot-steps", type=int, default=350)
     parser.add_argument("--safe-radius-m", type=float, default=1.0)
@@ -60,5 +60,5 @@ if __name__ == "__main__":
 
 """
 python deploy/deploy_mujoco_go2/train_MAP_Elites/load_terrain.py \
-  --angle-array deploy/deploy_mujoco_go2/train_MAP_Elites/map_elites_logs/best_angle_array.npy 
+  --angle-array deploy/deploy_mujoco_go2/train_MAP_Elites/logs/map_elites_logs/best_angle_array.npy 
 """
