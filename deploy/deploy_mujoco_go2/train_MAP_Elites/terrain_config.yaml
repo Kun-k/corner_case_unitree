@@ -1,5 +1,5 @@
 visualization:
-  render: False
+  render: True
   lock_camera: True
   realtime_sim: False
 

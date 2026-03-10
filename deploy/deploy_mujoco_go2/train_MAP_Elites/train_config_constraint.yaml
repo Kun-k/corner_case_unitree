@@ -1,14 +1,11 @@
 go2_task: "terrain"
 go2_config: "go2.yaml"
+
 terrain_config: "terrain_config.yaml"
 
 mode_y: 10
 mode_x: 10
-generations: 10
 seed: 0
-
-# Trig terrain amplitude max. Effective range becomes [-terrain_amplitude_max, terrain_amplitude_max].
-terrain_amplitude_max: 0.2
 
 max_robot_steps: 350
 safe_radius_m: 1.0
@@ -27,4 +24,13 @@ sigma_alt: 0.45
 
 iterations: 10
 save_every: 5
-log_name: "map_elites_logs_0309"
+
+# Constraint objective: maximize failure-prone score while minimizing amplitude
+fail_weight: 20.0
+reward_weight: 1.0
+amp_weight: 3.0
+amp_hinge_weight: 10.0
+target_amp_mean: 0.20
+
+log_name: "map_elites_constraint_logs_0310"
+

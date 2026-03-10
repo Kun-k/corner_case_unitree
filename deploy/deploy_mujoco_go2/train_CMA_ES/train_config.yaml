@@ -10,6 +10,9 @@ popsize: 8
 sigma: 0.8
 seed: 0
 
+# Trig terrain amplitude max. Effective range becomes [-terrain_amplitude_max, terrain_amplitude_max].
+terrain_amplitude_max: 1.0
+
 max_robot_steps: 350
 safe_radius_m: 1.0
 blend_radius_m: 2.0
