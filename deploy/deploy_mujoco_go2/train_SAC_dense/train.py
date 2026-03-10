@@ -83,6 +83,7 @@ def train_sac_dense(
     obs_abs_clip=1e3,
     plot_save_every_steps=2000,
     plot_smooth_window=20,
+    checkpoint_every_steps=10000,
 ):
     os.makedirs(log_dir, exist_ok=True)
 
@@ -126,6 +127,8 @@ def train_sac_dense(
         out_dir=log_dir,
         save_every_steps=int(plot_save_every_steps),
         smooth_window=int(plot_smooth_window),
+        checkpoint_every_steps=int(checkpoint_every_steps),
+        checkpoint_start_after_steps=int(learning_starts),
     )
     model.learn(total_timesteps=int(total_timesteps), callback=callback)
     model.save(model_path)
@@ -173,6 +176,7 @@ def main():
         obs_abs_clip=train_config.get("obs_abs_clip", 1e3),
         plot_save_every_steps=train_config.get("plot_save_every_steps", 2000),
         plot_smooth_window=train_config.get("plot_smooth_window", 20),
+        checkpoint_every_steps=train_config.get("checkpoint_every_steps", 10000),
     )
 
 

@@ -6,11 +6,13 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 
 class DenseTrainingLogger(BaseCallback):
-    def __init__(self, out_dir: str, save_every_steps: int = 2000, smooth_window: int = 20, verbose: int = 0):
+    def __init__(self, out_dir: str, save_every_steps: int = 2000, smooth_window: int = 20, checkpoint_every_steps: int = 10000, checkpoint_start_after_steps: int = 0, verbose: int = 0):
         super().__init__(verbose)
         self.out_dir = out_dir
         self.save_every_steps = int(max(1, save_every_steps))
         self.smooth_window = int(max(1, smooth_window))
+        self.checkpoint_every_steps = int(max(1, checkpoint_every_steps))
+        self.checkpoint_start_after_steps = int(max(0, checkpoint_start_after_steps))
 
         self.episode_rewards = []
         self.episode_lengths = []
@@ -44,6 +46,10 @@ class DenseTrainingLogger(BaseCallback):
         if self.num_timesteps % self.save_every_steps == 0:
             self._dump_metrics_csv("metrics_partial.csv")
             self._save_combined_plot("training_curves_partial.png")
+
+        if self.num_timesteps % self.checkpoint_every_steps == 0 and self.num_timesteps >= self.checkpoint_start_after_steps:
+            ckpt_path = os.path.join(self.out_dir, f"checkpoint_step_{self.num_timesteps}.zip")
+            self.model.save(ckpt_path)
 
         return True
 

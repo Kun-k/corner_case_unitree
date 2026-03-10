@@ -1,5 +1,5 @@
 import os
-import shutil
+import csv
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,59 +14,152 @@ from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymE
 
 
 class TrainingLoggerCallback(BaseCallback):
-    def __init__(self, verbose=0):
+    def __init__(
+        self,
+        out_dir: str,
+        save_every_steps: int = 2000,
+        smooth_window: int = 20,
+        checkpoint_every_steps: int = 10000,
+        verbose: int = 0,
+    ):
         super().__init__(verbose)
+        self.out_dir = out_dir
+        self.save_every_steps = int(max(1, save_every_steps))
+        self.smooth_window = int(max(1, smooth_window))
+        self.checkpoint_every_steps = int(max(1, checkpoint_every_steps))
+
         self.episode_rewards = []
+        self.episode_lengths = []
+        self.episode_timesteps = []
         self.actor_losses = []
         self.critic_losses = []
+        self.loss_timesteps = []
+
+        os.makedirs(self.out_dir, exist_ok=True)
 
     def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        for info in infos:
+            if isinstance(info, dict) and "episode" in info:
+                self.episode_rewards.append(float(info["episode"]["r"]))
+                self.episode_lengths.append(float(info["episode"].get("l", 0)))
+                self.episode_timesteps.append(int(self.num_timesteps))
 
-        # 记录 episode reward
-        for info in self.locals["infos"]:
-            if "episode" in info:
-                self.episode_rewards.append(info["episode"]["r"])
-
-        # 记录 loss
         if hasattr(self.model, "logger"):
             log_dict = self.model.logger.name_to_value
-
+            wrote_loss = False
             if "train/actor_loss" in log_dict:
-                self.actor_losses.append(log_dict["train/actor_loss"])
-
+                self.actor_losses.append(float(log_dict["train/actor_loss"]))
+                wrote_loss = True
             if "train/critic_loss" in log_dict:
-                self.critic_losses.append(log_dict["train/critic_loss"])
+                self.critic_losses.append(float(log_dict["train/critic_loss"]))
+                wrote_loss = True
+            if wrote_loss:
+                self.loss_timesteps.append(int(self.num_timesteps))
+
+        if self.num_timesteps % self.save_every_steps == 0:
+            self._dump_metrics_csv("metrics_partial.csv")
+            self._save_combined_plot("training_curves_partial.png")
+
+        if self.num_timesteps % self.checkpoint_every_steps == 0:
+            ckpt_path = os.path.join(self.out_dir, f"checkpoint_step_{self.num_timesteps}.zip")
+            self.model.save(ckpt_path)
 
         return True
 
+    def _on_training_end(self) -> None:
+        self._save_plot(self.episode_rewards, "Episode Reward", "episode_reward.png")
+        if len(self.actor_losses) > 0:
+            self._save_plot(self.actor_losses, "Actor Loss", "actor_loss.png")
+        if len(self.critic_losses) > 0:
+            self._save_plot(self.critic_losses, "Critic Loss", "critic_loss.png")
 
-def plot_training(callback, out_dir):
-    os.makedirs(out_dir, exist_ok=True)
+        self._dump_metrics_csv("metrics.csv")
+        self._save_combined_plot("training_curves.png")
 
-    plt.figure()
-    plt.plot(callback.episode_rewards)
-    plt.title("Episode Reward")
-    plt.xlabel("Episode")
-    plt.ylabel("Reward")
-    plt.grid()
-    plt.savefig(os.path.join(out_dir, "episode_reward.png"), dpi=140)
-    plt.close()
+    def _smooth(self, values):
+        arr = np.asarray(values, dtype=np.float32)
+        if arr.size < self.smooth_window:
+            return arr
+        kernel = np.ones((self.smooth_window,), dtype=np.float32) / float(self.smooth_window)
+        return np.convolve(arr, kernel, mode="valid")
 
-    if len(callback.actor_losses) > 0:
-        plt.figure()
-        plt.plot(callback.actor_losses)
-        plt.title("Actor Loss")
-        plt.grid()
-        plt.savefig(os.path.join(out_dir, "actor_loss.png"), dpi=140)
-        plt.close()
+    def _save_plot(self, values, title: str, filename: str):
+        if len(values) == 0:
+            return
+        fig = plt.figure()
+        plt.plot(values, linewidth=1.0)
+        smoothed = self._smooth(values)
+        if smoothed.size > 0 and smoothed.size != len(values):
+            offset = len(values) - smoothed.size
+            plt.plot(np.arange(offset, len(values)), smoothed, linewidth=2.0)
+        plt.title(title)
+        plt.grid(True)
+        fig.savefig(os.path.join(self.out_dir, filename), dpi=140)
+        plt.close(fig)
 
-    if len(callback.critic_losses) > 0:
-        plt.figure()
-        plt.plot(callback.critic_losses)
-        plt.title("Critic Loss")
-        plt.grid()
-        plt.savefig(os.path.join(out_dir, "critic_loss.png"), dpi=140)
-        plt.close()
+    def _dump_metrics_csv(self, filename: str):
+        csv_path = os.path.join(self.out_dir, filename)
+        max_len = max(len(self.episode_rewards), len(self.actor_losses), len(self.critic_losses))
+        if max_len == 0:
+            return
+
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "episode_timestep",
+                "episode_reward",
+                "episode_length",
+                "loss_timestep",
+                "actor_loss",
+                "critic_loss",
+            ])
+            for i in range(max_len):
+                writer.writerow([
+                    self.episode_timesteps[i] if i < len(self.episode_timesteps) else "",
+                    self.episode_rewards[i] if i < len(self.episode_rewards) else "",
+                    self.episode_lengths[i] if i < len(self.episode_lengths) else "",
+                    self.loss_timesteps[i] if i < len(self.loss_timesteps) else "",
+                    self.actor_losses[i] if i < len(self.actor_losses) else "",
+                    self.critic_losses[i] if i < len(self.critic_losses) else "",
+                ])
+
+    def _save_combined_plot(self, filename: str):
+        if len(self.episode_rewards) == 0 and len(self.actor_losses) == 0 and len(self.critic_losses) == 0:
+            return
+
+        fig, axes = plt.subplots(3, 1, figsize=(8, 10))
+
+        if len(self.episode_rewards) > 0:
+            axes[0].plot(self.episode_timesteps, self.episode_rewards, linewidth=1.0, label="reward")
+            smoothed = self._smooth(self.episode_rewards)
+            if smoothed.size > 0 and smoothed.size != len(self.episode_rewards):
+                offset = len(self.episode_rewards) - smoothed.size
+                axes[0].plot(self.episode_timesteps[offset:], smoothed, linewidth=2.0, label=f"reward_ma{self.smooth_window}")
+            axes[0].set_title("Episode Reward")
+            axes[0].grid(True)
+            axes[0].legend(loc="best")
+
+        if len(self.actor_losses) > 0:
+            x_actor = self.loss_timesteps[:len(self.actor_losses)] if len(self.loss_timesteps) >= len(self.actor_losses) else np.arange(len(self.actor_losses))
+            axes[1].plot(x_actor, self.actor_losses, linewidth=1.0, label="actor_loss")
+            axes[1].set_title("Actor Loss")
+            axes[1].grid(True)
+            axes[1].legend(loc="best")
+
+        if len(self.critic_losses) > 0:
+            x_critic = self.loss_timesteps[:len(self.critic_losses)] if len(self.loss_timesteps) >= len(self.critic_losses) else np.arange(len(self.critic_losses))
+            axes[2].plot(x_critic, self.critic_losses, linewidth=1.0, label="critic_loss")
+            axes[2].set_title("Critic Loss")
+            axes[2].grid(True)
+            axes[2].legend(loc="best")
+
+        for ax in axes:
+            ax.set_xlabel("Timesteps")
+
+        fig.tight_layout()
+        fig.savefig(os.path.join(self.out_dir, filename), dpi=150)
+        plt.close(fig)
 
 
 def configure_torch_runtime(cfg: dict):
@@ -101,7 +194,10 @@ def train_sac(go2_cfg, terrain_cfg,
               gradient_steps=1,
               tau=0.005,
               gamma=0.99,
-              seed=0):
+              seed=0,
+              plot_save_every_steps=2000,
+              plot_smooth_window=20,
+              checkpoint_every_steps=10000):
 
     def make_env():
         trainer = TerrainTrainer(go2_cfg, terrain_cfg)
@@ -135,14 +231,17 @@ def train_sac(go2_cfg, terrain_cfg,
         seed=int(seed),
     )
 
-    callback = TrainingLoggerCallback()
+    callback = TrainingLoggerCallback(
+        out_dir=log_dir,
+        save_every_steps=int(plot_save_every_steps),
+        smooth_window=int(plot_smooth_window),
+        checkpoint_every_steps=int(checkpoint_every_steps),
+    )
 
     model.learn(total_timesteps=total_timesteps,
                 callback=callback)
 
     model.save(os.path.join(log_dir, "model.zip"))
-
-    plot_training(callback, log_dir)
 
 
 def main():
@@ -181,6 +280,9 @@ def main():
         tau=train_config.get("tau", 0.005),
         gamma=train_config.get("gamma", 0.99),
         seed=train_config.get("seed", 0),
+        plot_save_every_steps=train_config.get("plot_save_every_steps", 2000),
+        plot_smooth_window=train_config.get("plot_smooth_window", 20),
+        checkpoint_every_steps=train_config.get("checkpoint_every_steps", 10000),
     )
 
 

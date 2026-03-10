@@ -36,9 +36,13 @@ plot_save_every_steps: 2000
 # Moving average window for reward smoothing.
 plot_smooth_window: 20
 
-dense_sample_ratio: 0.7
+# Checkpoint
+# Save model checkpoint every N timesteps.
+checkpoint_every_steps: 200
 
-log_name: "sac_dense_0310-rew2-ratio70"
+dense_sample_ratio: 0.3
+
+log_name: "sac_dense_0310-rew2-ratio30"
 #log_name: "debug"
 
-#nohup python deploy/deploy_mujoco_go2/train_SAC_dense/train.py >nohup_sac_dense_0310-rew2-ratio70.out 2>&1 &
+#nohup python deploy/deploy_mujoco_go2/train_SAC_dense/train.py >nohup_sac_dense_0310-rew2-ratio30.out 2>&1 &
