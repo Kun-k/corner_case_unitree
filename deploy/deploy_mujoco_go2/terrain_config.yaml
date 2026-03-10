@@ -76,5 +76,5 @@ observation:
   contact_force_threshold: 1.0
   local_height_map:
     enabled: true
-    size_m: 1.0
+    size_m: 0.8
     resolution_m: 0.2
