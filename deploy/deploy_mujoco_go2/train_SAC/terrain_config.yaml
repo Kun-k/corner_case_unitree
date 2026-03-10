@@ -39,16 +39,16 @@ event_and_reward:
 
   # ===== 碰撞 =====
   collision_force_threshold: 80.0
-  collision_reward: 0.0
+  collision_reward: 0
   base_collision_reward: 6.0
   thigh_collision_reward: 2.0
 
   # ===== 失稳 =====
-  tilt_reward_scale: 0.0
+  tilt_reward_scale: 0.1
 
   # ===== 速度惩罚 =====
   target_speed: 0.5
-  speed_reward_scale: 0.0
+  speed_reward_scale: 0.5
   stuck_speed_threshold: 0.05
   stuck_reward: 4.0
 
