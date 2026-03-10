@@ -1,4 +1,13 @@
-import os
+# 脚本顶部添加
+import os, sys
+# 获取脚本所在目录
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# 回溯到项目根目录（根据你的目录结构，../.. 表示向上2级，../../.. 向上3级）
+root_dir = os.path.abspath(os.path.join(script_dir, '../../..'))
+# 添加到 sys.path
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)  # 插入到最前面，优先查找
+
 import csv
 import pickle
 import numpy as np
@@ -91,6 +100,9 @@ def evaluate_policy(
         has_stuck = False
 
         for step_idx in range(max_episode_steps):
+
+            print(f"Episode {ep+1}/{episodes}, Step {step_idx+1}/{max_episode_steps}", end="\r")
+
             if model is None:
                 action = rng.uniform(-1.0, 1.0, size=env.action_space.shape).astype(np.float32)
             else:
@@ -118,7 +130,7 @@ def evaluate_policy(
             }
             ep_chain.append(transition)
 
-            has_collision = has_collision or info_dict["collided"]
+            has_collision = has_collision  # or info_dict["collided"]
             has_fall = has_fall or info_dict["fallen"]
             has_base_collision = has_base_collision or info_dict["base_collision"]
             has_thigh_collision = has_thigh_collision or info_dict["thigh_collision"]

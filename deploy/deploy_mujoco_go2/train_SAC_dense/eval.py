@@ -118,7 +118,7 @@ def evaluate_policy(
             }
             ep_chain.append(transition)
 
-            has_collision = has_collision or info_dict["collided"]
+            has_collision = has_collision  # or info_dict["collided"]
             has_fall = has_fall or info_dict["fallen"]
             has_base_collision = has_base_collision or info_dict["base_collision"]
             has_thigh_collision = has_thigh_collision or info_dict["thigh_collision"]

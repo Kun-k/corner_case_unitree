@@ -9,7 +9,7 @@ episodes: 20000
 max_episode_steps: 350
 seed: 42
 
-#log_name: "random_eval_0309"
+#log_name: "random_eval_0310_8"
 log_name: "random_eval_debug"
 #log_name: "policy_eval_debug"
 
@@ -17,3 +17,12 @@ use_curr_force: False  # 强制使用当前配置
 
 render: False
 
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_1.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_2.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_3.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_4.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_5.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_6.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_7.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_8.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_8.out 2>&1 &
