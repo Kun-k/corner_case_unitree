@@ -69,6 +69,7 @@ def train_sac_dense(
     model_path="sac_dense_model.zip",
     log_dir="train_terrain_logs_dense",
     reward_threshold=8.0,
+    dense_sample_ratio=0.7,
     learning_starts=10000,
     device="auto",
     learning_rate=1e-4,
@@ -102,6 +103,7 @@ def train_sac_dense(
             "Please check terrain config and ensure terrain_action.terrain_types includes controllable types (e.g. ['bump'])."
         )
 
+    print(device)
     model = SAC(
         "MlpPolicy",
         vec_env,
@@ -115,7 +117,7 @@ def train_sac_dense(
         tau=float(tau),
         gamma=float(gamma),
         replay_buffer_class=FailureReplayBuffer,
-        replay_buffer_kwargs={"reward_threshold": float(reward_threshold)},
+        replay_buffer_kwargs={"reward_threshold": float(reward_threshold), "dense_sample_ratio": dense_sample_ratio},
         device=device,
         seed=int(seed),
     )
@@ -157,6 +159,7 @@ def main():
         model_path=os.path.join(log_dir, "model.zip"),
         log_dir=log_dir,
         reward_threshold=train_config.get("reward_threshold", 8.0),
+        dense_sample_ratio=train_config.get("dense_sample_ratio", 0.7),
         learning_starts=train_config.get("learning_starts", 10000),
         device=train_config.get("device", "auto"),
         learning_rate=train_config.get("learning_rate", 1e-4),

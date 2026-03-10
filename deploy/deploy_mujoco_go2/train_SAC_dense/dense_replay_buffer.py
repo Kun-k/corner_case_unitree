@@ -13,11 +13,14 @@ class FailureReplayBuffer(ReplayBuffer):
       failure-relevant or cumulative reward is high.
     """
 
-    def __init__(self, *args, reward_threshold=8.0, **kwargs):
+    def __init__(self, *args, reward_threshold=8.0, dense_sample_ratio=0.7, **kwargs):
         super().__init__(*args, **kwargs)
         self.reward_threshold = float(reward_threshold)
+        self.dense_sample_ratio = float(np.clip(dense_sample_ratio, 0.0, 1.0))
         self._pending = [[] for _ in range(self.n_envs)]
         self._episode_reward = np.zeros((self.n_envs,), dtype=np.float32)
+        # True means this row was inserted as dense-selected transition.
+        self._dense_mask = np.zeros((self.buffer_size,), dtype=np.bool_)
 
     def _is_failure_info(self, info: dict) -> bool:
         if not isinstance(info, dict):
@@ -42,6 +45,8 @@ class FailureReplayBuffer(ReplayBuffer):
             np.array([d], dtype=np.float32),
             [info],
         )
+        inserted_idx = (self.pos - 1) % self.buffer_size
+        self._dense_mask[inserted_idx] = True
 
     def add(self, obs, next_obs, action, reward, done, infos):
         # Always keep the base stream so SB3 can sample from step 1+.
@@ -55,6 +60,10 @@ class FailureReplayBuffer(ReplayBuffer):
             safe_infos = [dict(dense_selected=False) for _ in range(self.n_envs)]
 
         super().add(obs, next_obs, action, reward, done, safe_infos)
+
+        # Mark base stream as non-dense-selected.
+        inserted_idx = (self.pos - 1) % self.buffer_size
+        self._dense_mask[inserted_idx] = False
 
         # Keep episode-level cache and duplicate selected episodes for bias.
         obs = np.asarray(obs)
@@ -87,3 +96,42 @@ class FailureReplayBuffer(ReplayBuffer):
                 self._pending[env_idx] = []
                 self._episode_reward[env_idx] = 0.0
 
+    def sample(self, batch_size, env=None):
+        """Prioritize dense-selected rows during sampling.
+
+        - dense_sample_ratio controls fraction sampled from dense_selected=True rows.
+        - fallback to uniform sampling if dense pool is empty.
+        """
+        upper_bound = self.buffer_size if self.full else self.pos
+        if upper_bound <= 0:
+            return super().sample(batch_size=batch_size, env=env)
+
+        if self.dense_sample_ratio <= 0.0:
+            return super().sample(batch_size=batch_size, env=env)
+
+        dense_mask = self._dense_mask[:upper_bound]
+        dense_pool = np.flatnonzero(dense_mask)
+        if dense_pool.size == 0:
+            return super().sample(batch_size=batch_size, env=env)
+
+        n_dense = int(round(batch_size * self.dense_sample_ratio))
+        n_dense = max(1, min(batch_size, n_dense))
+        n_dense = min(n_dense, dense_pool.size)
+
+        dense_inds = np.random.choice(dense_pool, size=n_dense, replace=False)
+
+        n_other = batch_size - n_dense
+        if n_other > 0:
+            other_pool = np.flatnonzero(~dense_mask)
+            if other_pool.size >= n_other:
+                other_inds = np.random.choice(other_pool, size=n_other, replace=False)
+            elif other_pool.size > 0:
+                other_inds = np.random.choice(other_pool, size=n_other, replace=True)
+            else:
+                other_inds = np.random.randint(0, upper_bound, size=n_other)
+            batch_inds = np.concatenate([dense_inds, other_inds])
+        else:
+            batch_inds = dense_inds
+
+        np.random.shuffle(batch_inds)
+        return self._get_samples(batch_inds, env=env)

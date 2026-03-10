@@ -97,14 +97,15 @@ def evaluate_policy(
                 action, _ = model.predict(obs, deterministic=True)
             next_obs, reward, terminated, truncated, info = env.step(action)
 
-            info_dict = {
-                "fallen": bool(info.get("fallen", False)),
-                "collided": bool(info.get("collided", False)),
-                "base_collision": bool(info.get("base_collision", False)),
-                "thigh_collision": bool(info.get("thigh_collision", False)),
-                "terrain_reward": float(info.get("terrain_reward", 0.0)),
-                "stuck": bool(info.get("stuck", False)),
-            }
+            # info_dict = {
+            #     "fallen": bool(info.get("fallen", False)),
+            #     "collided": bool(info.get("collided", False)),
+            #     "base_collision": bool(info.get("base_collision", False)),
+            #     "thigh_collision": bool(info.get("thigh_collision", False)),
+            #     "terrain_reward": float(info.get("terrain_reward", 0.0)),
+            #     "stuck": bool(info.get("stuck", False)),
+            # }
+            info_dict = info  # info中包含所有奖励项，包括未加权值
 
             transition = {
                 "obs": np.asarray(obs, dtype=np.float32).tolist(),
