@@ -53,8 +53,8 @@ class TerrainTrainer:
         # Terrain setup
         with open(f"{os.path.dirname(os.path.realpath(__file__))}/{terrain_config_file}", "r") as f:
             self.terrain_config = yaml.load(f, Loader=yaml.FullLoader)
-        self.terrain_decimation = self.terrain_config.get("terrain_action", 0).get("terrain_decimation", 0)
-        self.terrain_types = self.terrain_config.get("terrain_action", 0).get("terrain_types", [])
+        self.terrain_decimation = self.terrain_config.get("terrain_action", {}).get("terrain_decimation", 0)
+        self.terrain_types = self.terrain_config.get("terrain_action", {}).get("terrain_types", [])
 
         # per-episode bookkeeping for terrain rewards
         # if repeat_reward is False (default), collision/fall rewards are given only once per episode
@@ -220,7 +220,8 @@ class TerrainTrainer:
         # done = False  # TODO 是否需要根据fall和collision判断
 
         # print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
-        if terrain_reward != 0.0:
+        # if terrain_reward != 0.0:
+        if terrain_reward >= 1.0:
             print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}, info: {terrain_info}")
 
         return next_terrain_obs, np.asarray(terrain_action, dtype=np.float32), float(terrain_reward), done, info

@@ -204,7 +204,7 @@ class TerrainChanger:
     def set_bump(self, gx, gy, radius, height, robot_gx, robot_gy):
 
         # ['terrain_action']['no_change_radius']
-        no_change_radius = self.terrain_config.get('terrain_action', False).get('no_change_radius', False)
+        no_change_radius = self.terrain_config.get('terrain_action', {}).get('no_change_radius', False)
         no_change_radius_grid = no_change_radius / self.grid_resolution
 
         for row in range(self.nrow):
@@ -364,6 +364,8 @@ class TerrainChanger:
         pile_h = max(1, int(round(float(pile_size_m) / max(grid_res_y, 1e-8))))
         gap_x = max(1, int(round(float(gap_m) / max(grid_res_x, 1e-8))))
         gap_y = max(1, int(round(float(gap_m) / max(grid_res_y, 1e-8))))
+        # gap_x = 0
+        # gap_y = 0
 
         cx, cy = self._world_to_grid(float(center_world[0]), float(center_world[1]))
         total_w = num_x * pile_w + (num_x - 1) * gap_x
@@ -402,7 +404,7 @@ class TerrainChanger:
             r0, r1, c0, c1 = self._pile_regions[key]
             self.hfield[r0:r1, c0:c1] += dh
 
-        foot_clearance_m = float(terrain_config.get("plum_blossom", 0).get("foot_clearance_m", 0))
+        foot_clearance_m = float(self.terrain_config.get("plum_blossom", {}).get("foot_clearance_m", 0))
         self._lift_robot_if_needed(foot_clearance_m)
         self._refresh_terrain()
 
