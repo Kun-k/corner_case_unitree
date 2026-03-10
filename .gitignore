@@ -160,3 +160,4 @@ cython_debug/
 
 # logs
 logs
+/deploy/deploy_mujoco_go2/train_SAC/eval_logs/
