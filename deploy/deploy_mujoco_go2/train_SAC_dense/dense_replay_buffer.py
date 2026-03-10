@@ -116,9 +116,12 @@ class FailureReplayBuffer(ReplayBuffer):
 
         n_dense = int(round(batch_size * self.dense_sample_ratio))
         n_dense = max(1, min(batch_size, n_dense))
-        n_dense = min(n_dense, dense_pool.size)
+        # n_dense = min(n_dense, dense_pool.size)
 
-        dense_inds = np.random.choice(dense_pool, size=n_dense, replace=False)
+        if dense_pool.size >= n_dense:
+            dense_inds = np.random.choice(dense_pool, size=n_dense, replace=False)
+        else:
+            dense_inds = np.random.choice(dense_pool, size=n_dense, replace=True)
 
         n_other = batch_size - n_dense
         if n_other > 0:
