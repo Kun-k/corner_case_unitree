@@ -12,6 +12,7 @@ def _build_log_paths(log_dir):
     return {
         "log_dir": log_dir,
         "pkl": os.path.join(log_dir, "collision_failures.pkl"),
+        "non_failure_pkl": os.path.join(log_dir, "non_failure_trajectories.pkl"),
         "csv": os.path.join(log_dir, "failure_summary.csv"),
     }
 
@@ -44,7 +45,8 @@ def evaluate_policy(
     max_episode_steps,
     log_dir,
     seed,
-    render
+    render,
+    save_non_failure_trajectories=False,
 ):
 
     current_path = os.path.dirname(os.path.realpath(__file__))
@@ -81,6 +83,7 @@ def evaluate_policy(
     }
 
     failures = []
+    non_failures = []
 
     for ep in range(episodes):
         obs, info = env.reset()
@@ -152,6 +155,10 @@ def evaluate_policy(
             failures.append({"episode": ep, "chain": ep_chain})
             with open(paths["pkl"], "wb") as pf:
                 pickle.dump(failures, pf)
+        elif save_non_failure_trajectories:
+            non_failures.append({"episode": ep, "chain": ep_chain})
+            with open(paths["non_failure_pkl"], "wb") as pf:
+                pickle.dump(non_failures, pf)
 
         if summary["episodes_evaluated"] % 100 == 0:
             _append_csv_row(paths["csv"], summary.copy())
@@ -202,8 +209,19 @@ def main():
         seed = 0
 
     render = eval_config["render"]
+    save_non_failure_trajectories = bool(eval_config.get("save_non_failure_trajectories", False))
 
-    evaluate_policy(model=model, go2_cfg=go2_cfg, terrain_cfg=terrain_cfg, episodes=episodes, max_episode_steps=max_episode_steps, log_dir=log_dir, seed=seed, render=render)
+    evaluate_policy(
+        model=model,
+        go2_cfg=go2_cfg,
+        terrain_cfg=terrain_cfg,
+        episodes=episodes,
+        max_episode_steps=max_episode_steps,
+        log_dir=log_dir,
+        seed=seed,
+        render=render,
+        save_non_failure_trajectories=save_non_failure_trajectories,
+    )
 
 
 if __name__ == "__main__":

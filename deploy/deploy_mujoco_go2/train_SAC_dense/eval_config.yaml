@@ -17,6 +17,7 @@ log_name: "policy_eval_sac_0310_rew2_21000"
 use_curr_force: False  # 强制使用当前配置
 
 render: False
+save_non_failure_trajectories: false
 
 #nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_21000.out 2>&1 &
 #nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_22000.out 2>&1 &

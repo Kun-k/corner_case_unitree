@@ -1,31 +1,28 @@
-#policy: "random"  # random表示随机策略，其余情况下则查找训练好的模型
-policy: "sac_0310-rew2"  # random表示随机策略，其余情况下则查找训练好的模型
-checkpoint: "checkpoint_step_22000"
+policy: "random"  # random表示随机策略，其余情况下则查找训练好的模型
+checkpoint: ""
+
+#policy: "sac_0310-rew2"  # random表示随机策略，其余情况下则查找训练好的模型
+#checkpoint: "checkpoint_step_22000"
 
 go2_task: "terrain"
 go2_config: "go2.yaml"
 terrain_config: "terrain_config.yaml"
 
 episodes: 200
-max_episode_steps: 350
-seed: 22000
 
-#log_name: "random_eval_0310_18"
+max_episode_steps: 35
+seed: 4
+
 #log_name: "random_eval_debug"
-log_name: "policy_eval_sac_0310_rew2_22000"
+#log_name: "random_eval_0311-4"
+log_name: "random_eval_0311-9-withnonfailure"
 
 use_curr_force: False  # 强制使用当前配置
 
-render: True
+render: False
+save_non_failure_trajectories: True
 
 #nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_21000.out 2>&1 &
 #nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_22000.out 2>&1 &
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_11.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_12.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_13.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_14.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_15.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_16.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_17.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0310_18.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_0311-9-withnonfailure.out 2>&1 &
