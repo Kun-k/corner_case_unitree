@@ -318,6 +318,7 @@ class TerrainTrainer:
     def get_terrain_observation(self):
         """Terrain obs = robot obs + optional foot contacts + optional local map + optional last terrain action."""
         robot_obs = self.go2_controller.get_observation(self.data).astype(np.float32)
+        robot_obs = robot_obs[:len(robot_obs) - self.go2_controller.num_actions]  # TODO 去掉robot obs中的last action部分
         chunks = [robot_obs]
 
         if self.obs_include_foot_contacts:
