@@ -1,5 +1,6 @@
 # 脚本顶部添加
 import os, sys
+
 # 获取脚本所在目录
 script_dir = os.path.dirname(os.path.abspath(__file__))
 # 回溯到项目根目录（根据你的目录结构，../.. 表示向上2级，../../.. 向上3级）
@@ -89,6 +90,8 @@ def evaluate_policy(
         "stuck_failures": 0,
     }
 
+    failures = []
+
     for ep in range(episodes):
         obs, info = env.reset()
         ep_chain = []
@@ -106,7 +109,7 @@ def evaluate_policy(
             if model is None:
                 action = rng.uniform(-1.0, 1.0, size=env.action_space.shape).astype(np.float32)
             else:
-                action, _ = model.predict(obs, deterministic=True)
+                action, _ = model.predict(obs, deterministic=False)
             next_obs, reward, terminated, truncated, info = env.step(action)
 
             # info_dict = {
@@ -156,8 +159,9 @@ def evaluate_policy(
             summary["stuck_failures"] += 1
 
         if has_failure:
+            failures.append({"episode": ep, "chain": ep_chain})
             with open(paths["pkl"], "wb") as pf:
-                pickle.dump({"episode": ep, "chain": ep_chain}, pf)
+                pickle.dump(failures, pf)
 
         if summary["episodes_evaluated"] % 100 == 0:
             _append_csv_row(paths["csv"], summary.copy())
@@ -177,13 +181,14 @@ def main():
     log_dir = os.path.join(current_path, "eval_logs", eval_config["log_name"])
 
     policy = eval_config['policy']
+    checkpoint = eval_config['checkpoint']
 
     if policy == "random":
         print("Evaluating random policy...")
         model = None
     else:
         print(f"Evaluating policy from {policy}...")
-        model_path = str(os.path.join(current_path, "train_logs", policy, "model.zip"))
+        model_path = str(os.path.join(current_path, "train_logs", policy, checkpoint))
         model = SAC.load(model_path)
 
     if policy == "random" or eval_config["use_curr_force"]:
