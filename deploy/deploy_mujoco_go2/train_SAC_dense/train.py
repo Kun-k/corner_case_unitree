@@ -1,5 +1,6 @@
 import os
-import shutil
+import pickle
+import glob
 
 import numpy as np
 import torch
@@ -12,6 +13,79 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecCheckNan
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
 from deploy.deploy_mujoco_go2.train_SAC_dense.callbacks import DenseTrainingLogger
 from deploy.deploy_mujoco_go2.train_SAC_dense.dense_replay_buffer import FailureReplayBuffer
+
+
+class FailureRecordingWrapper(gym.Wrapper):
+    """Record failure episodes during training and dump to PKL."""
+
+    def __init__(self, env, out_dir: str, pkl_name: str = "train_failure_chains.pkl", flush_every_episodes: int = 50):
+        super().__init__(env)
+        self.out_dir = out_dir
+        self.pkl_path = os.path.join(out_dir, pkl_name)
+        self.flush_every_episodes = int(max(1, flush_every_episodes))
+
+        self._curr_obs = None
+        self._curr_chain = []
+        self._episode_idx = 0
+        self._failure_episodes = []
+
+        os.makedirs(self.out_dir, exist_ok=True)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self._curr_obs = np.asarray(obs, dtype=np.float32)
+        self._curr_chain = []
+        return obs, info
+
+    def step(self, action):
+        next_obs, reward, terminated, truncated, info = self.env.step(action)
+        done = bool(terminated or truncated)
+
+        # info_dict = {
+        #     "fallen": bool(info.get("fallen", False)),
+        #     "collided": bool(info.get("collided", False)),
+        #     "base_collision": bool(info.get("base_collision", False)),
+        #     "thigh_collision": bool(info.get("thigh_collision", False)),
+        #     "stuck": bool(info.get("stuck", False)),
+        #     "terrain_reward": float(info.get("terrain_reward", 0.0)),
+        # }
+
+        tr = {
+            "obs": np.asarray(self._curr_obs, dtype=np.float32).tolist() if self._curr_obs is not None else [],
+            "action": np.asarray(action, dtype=np.float32).tolist(),
+            "reward": float(reward),
+            "next_obs": np.asarray(next_obs, dtype=np.float32).tolist(),
+            "done": done,
+            "terrain_control": np.asarray(action, dtype=np.float32).tolist(),
+            "info": info,
+        }
+        self._curr_chain.append(tr)
+        self._curr_obs = np.asarray(next_obs, dtype=np.float32)
+
+        if done:
+            has_failure = bool(
+                info["fallen"]
+                # or info_dict["collided"]
+                or info["base_collision"]
+                or info["thigh_collision"]
+                or info["stuck"]
+            )
+            if has_failure:
+                self._failure_episodes.append({"episode": int(self._episode_idx), "chain": self._curr_chain})
+            self._episode_idx += 1
+
+            if self._episode_idx % self.flush_every_episodes == 0:
+                self._flush()
+
+        return next_obs, reward, terminated, truncated, info
+
+    def _flush(self):
+        with open(self.pkl_path, "wb") as f:
+            pickle.dump(self._failure_episodes, f)
+
+    def close(self):
+        self._flush()
+        return self.env.close()
 
 
 class FiniteValueWrapper(gym.Wrapper):
@@ -61,18 +135,91 @@ def configure_torch_runtime(cfg: dict):
         torch.set_num_threads(num_threads)
 
 
+def _extract_chains_from_obj(obj):
+    chains = []
+    if isinstance(obj, dict):
+        if "chain" in obj and isinstance(obj["chain"], list):
+            chains.append(obj["chain"])
+        elif "chains" in obj and isinstance(obj["chains"], list):
+            for c in obj["chains"]:
+                if isinstance(c, list):
+                    chains.append(c)
+    elif isinstance(obj, list):
+        if len(obj) == 0:
+            return chains
+        if isinstance(obj[0], dict) and "chain" in obj[0]:
+            for ep in obj:
+                c = ep.get("chain", [])
+                if isinstance(c, list):
+                    chains.append(c)
+        elif isinstance(obj[0], dict) and "obs" in obj[0] and "action" in obj[0]:
+            chains.append(obj)
+    return chains
+
+
+def _collect_pkl_files(paths):
+    files = []
+    for p in paths:
+        if not p:
+            continue
+        if os.path.isdir(p):
+            files.extend(glob.glob(os.path.join(p, "*.pkl")))
+        elif os.path.isfile(p) and p.lower().endswith(".pkl"):
+            files.append(p)
+    return sorted(list(set(files)))
+
+
+def preload_replay_buffer_from_pkl(model, pkl_paths):
+    files = _collect_pkl_files(pkl_paths)
+    inserted = 0
+
+    obs_shape = model.observation_space.shape
+    act_shape = model.action_space.shape
+
+    for fp in files:
+        try:
+            with open(fp, "rb") as f:
+                obj = pickle.load(f)
+            chains = _extract_chains_from_obj(obj)
+        except Exception:
+            continue
+
+        for chain in chains:
+            for tr in chain:
+                try:
+                    obs = np.asarray(tr.get("obs", []), dtype=np.float32).reshape(obs_shape)
+                    next_obs = np.asarray(tr.get("next_obs", []), dtype=np.float32).reshape(obs_shape)
+                    action = np.asarray(tr.get("action", []), dtype=np.float32).reshape(act_shape)
+                    reward = float(tr.get("reward", 0.0))
+                    done = float(bool(tr.get("done", False)))
+                    info = tr.get("info", {}) if isinstance(tr.get("info", {}), dict) else {}
+
+                    model.replay_buffer.add(
+                        np.expand_dims(obs, axis=0),
+                        np.expand_dims(next_obs, axis=0),
+                        np.expand_dims(action, axis=0),
+                        np.array([reward], dtype=np.float32),
+                        np.array([done], dtype=np.float32),
+                        [info],
+                    )
+                    inserted += 1
+                except Exception:
+                    continue
+
+    print(f"[train_SAC_dense] replay preload inserted transitions: {inserted}")
+
+
 def train_sac_dense(
     go2_cfg,
     terrain_cfg,
-    total_timesteps=50000,
-    max_episode_steps=350,
-    model_path="sac_dense_model.zip",
-    log_dir="train_terrain_logs_dense",
+    total_timesteps=20000,
+    max_episode_steps=35,
+    log_dir="train_terrain_logs",
     reward_threshold=8.0,
     dense_sample_ratio=0.7,
     learning_starts=10000,
     device="auto",
-    learning_rate=1e-4,
+    learning_rate=3e-4,
     batch_size=256,
     buffer_size=1_000_000,
     train_freq=1,
@@ -84,14 +231,24 @@ def train_sac_dense(
     plot_save_every_steps=2000,
     plot_smooth_window=20,
     checkpoint_every_steps=10000,
+    preload_model_path="",
+    preload_pkl_paths=None,
+    failure_pkl_name="train_failure_chains.pkl",
+    failure_flush_every_episodes=50,
 ):
-    os.makedirs(log_dir, exist_ok=True)
+    preload_pkl_paths = preload_pkl_paths or []
 
     def make_env():
         trainer = TerrainTrainer(go2_cfg, terrain_cfg)
         env = TerrainGymEnv(trainer, max_episode_steps=max_episode_steps)
         env = FiniteValueWrapper(env, obs_abs_clip=obs_abs_clip)
         env = Monitor(env)
+        env = FailureRecordingWrapper(
+            env,
+            out_dir=log_dir,
+            pkl_name=failure_pkl_name,
+            flush_every_episodes=failure_flush_every_episodes,
+        )
         return env
 
     vec_env = DummyVecEnv([make_env])
@@ -104,24 +261,30 @@ def train_sac_dense(
             "Please check terrain config and ensure terrain_action.terrain_types includes controllable types (e.g. ['bump'])."
         )
 
-    print(device)
-    model = SAC(
-        "MlpPolicy",
-        vec_env,
-        verbose=1,
-        learning_starts=int(learning_starts),
-        learning_rate=float(learning_rate),
-        batch_size=int(batch_size),
-        buffer_size=int(buffer_size),
-        train_freq=int(train_freq),
-        gradient_steps=int(gradient_steps),
-        tau=float(tau),
-        gamma=float(gamma),
-        replay_buffer_class=FailureReplayBuffer,
-        replay_buffer_kwargs={"reward_threshold": float(reward_threshold), "dense_sample_ratio": dense_sample_ratio},
-        device=device,
-        seed=int(seed),
-    )
+    if preload_model_path and os.path.exists(preload_model_path):
+        print(f"[train_SAC_dense] loading pretrained model from: {preload_model_path}")
+        model = SAC.load(preload_model_path, env=vec_env, device=device)
+    else:
+        model = SAC(
+            "MlpPolicy",
+            vec_env,
+            verbose=1,
+            device=device,
+            learning_rate=float(learning_rate),
+            batch_size=int(batch_size),
+            buffer_size=int(buffer_size),
+            learning_starts=int(learning_starts),
+            train_freq=int(train_freq),
+            gradient_steps=int(gradient_steps),
+            tau=float(tau),
+            gamma=float(gamma),
+            replay_buffer_class=FailureReplayBuffer,
+            replay_buffer_kwargs={"reward_threshold": float(reward_threshold), "dense_sample_ratio": dense_sample_ratio},
+            seed=int(seed),
+        )
+
+    if preload_pkl_paths:
+        preload_replay_buffer_from_pkl(model, preload_pkl_paths)
 
     callback = DenseTrainingLogger(
         out_dir=log_dir,
@@ -130,9 +293,11 @@ def train_sac_dense(
         checkpoint_every_steps=int(checkpoint_every_steps),
         checkpoint_start_after_steps=int(learning_starts),
     )
-    model.learn(total_timesteps=int(total_timesteps), callback=callback)
-    model.save(model_path)
-    return model_path
+
+    model.learn(total_timesteps=total_timesteps,
+                callback=callback)
+
+    model.save(os.path.join(log_dir, "model.zip"))
 
 
 def main():
@@ -145,7 +310,6 @@ def main():
 
     log_dir = f"{current_path}/train_logs/{train_config['log_name']}"
     os.makedirs(log_dir, exist_ok=True)
-
     terrain_cfg_file = os.path.join(current_path, train_config["terrain_config"])
     train_cfg_file = os.path.join(current_path, train_config_file)
     os.system(f"cp {terrain_cfg_file} {log_dir}")
@@ -159,7 +323,6 @@ def main():
         terrain_cfg,
         total_timesteps=train_config["total_timesteps"],
         max_episode_steps=train_config["max_episode_steps"],
-        model_path=os.path.join(log_dir, "model.zip"),
         log_dir=log_dir,
         reward_threshold=train_config.get("reward_threshold", 8.0),
         dense_sample_ratio=train_config.get("dense_sample_ratio", 0.7),
@@ -177,6 +340,10 @@ def main():
         plot_save_every_steps=train_config.get("plot_save_every_steps", 2000),
         plot_smooth_window=train_config.get("plot_smooth_window", 20),
         checkpoint_every_steps=train_config.get("checkpoint_every_steps", 10000),
+        preload_model_path=train_config.get("preload_model_path", ""),
+        preload_pkl_paths=train_config.get("preload_pkl_paths", []),
+        failure_pkl_name=train_config.get("failure_pkl_name", "train_failure_chains.pkl"),
+        failure_flush_every_episodes=train_config.get("failure_flush_every_episodes", 50),
     )
 
 

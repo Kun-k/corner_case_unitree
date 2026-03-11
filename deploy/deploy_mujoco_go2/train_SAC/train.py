@@ -1,5 +1,7 @@
 import os
 import csv
+import pickle
+import glob
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,7 +12,85 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
+
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
+
+
+class FailureRecordingWrapper(gym.Wrapper):
+    """Record failure episodes as transition chains and periodically dump to PKL."""
+
+    def __init__(self, env, out_dir: str, pkl_name: str = "train_failure_chains.pkl", flush_every_episodes: int = 50):
+        super().__init__(env)
+        self.out_dir = out_dir
+        self.pkl_path = os.path.join(out_dir, pkl_name)
+        self.flush_every_episodes = int(max(1, flush_every_episodes))
+
+        self._curr_obs = None
+        self._curr_chain = []
+        self._episode_idx = 0
+        self._failure_episodes = []
+
+        os.makedirs(self.out_dir, exist_ok=True)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self._curr_obs = np.asarray(obs, dtype=np.float32)
+        self._curr_chain = []
+        return obs, info
+
+    def step(self, action):
+        next_obs, reward, terminated, truncated, info = self.env.step(action)
+        done = bool(terminated or truncated)
+
+        # info_dict = {
+        #     "fallen": bool(info.get("fallen", False)),
+        #     "collided": bool(info.get("collided", False)),
+        #     "base_collision": bool(info.get("base_collision", False)),
+        #     "thigh_collision": bool(info.get("thigh_collision", False)),
+        #     "stuck": bool(info.get("stuck", False)),
+        #     "terrain_reward": float(info.get("terrain_reward", 0.0)),
+        # }
+
+        tr = {
+            "obs": np.asarray(self._curr_obs, dtype=np.float32).tolist() if self._curr_obs is not None else [],
+            "action": np.asarray(action, dtype=np.float32).tolist(),
+            "reward": float(reward),
+            "next_obs": np.asarray(next_obs, dtype=np.float32).tolist(),
+            "done": done,
+            "terrain_control": np.asarray(action, dtype=np.float32).tolist(),
+            "info": info,
+        }
+        self._curr_chain.append(tr)
+        self._curr_obs = np.asarray(next_obs, dtype=np.float32)
+
+        if done:
+            has_failure = bool(
+                info["fallen"]
+                # or info_dict["collided"]
+                or info["base_collision"]
+                or info["thigh_collision"]
+                or info["stuck"]
+            )
+            if has_failure:
+                self._failure_episodes.append({"episode": int(self._episode_idx), "chain": self._curr_chain})
+            self._episode_idx += 1
+
+            if self._episode_idx % self.flush_every_episodes == 0:
+                self._flush()
+
+        return next_obs, reward, terminated, truncated, info
+
+    def _flush(self):
+        with open(self.pkl_path, "wb") as f:
+            pickle.dump(self._failure_episodes, f)
+
+    def close(self):
+        self._flush()
+        return self.env.close()
 
 
 class TrainingLoggerCallback(BaseCallback):
@@ -181,6 +261,80 @@ def configure_torch_runtime(cfg: dict):
         torch.set_num_threads(num_threads)
 
 
+def _extract_chains_from_obj(obj):
+    chains = []
+    if isinstance(obj, dict):
+        if "chain" in obj and isinstance(obj["chain"], list):
+            chains.append(obj["chain"])
+        elif "chains" in obj and isinstance(obj["chains"], list):
+            for c in obj["chains"]:
+                if isinstance(c, list):
+                    chains.append(c)
+    elif isinstance(obj, list):
+        if len(obj) == 0:
+            return chains
+        if isinstance(obj[0], dict) and "chain" in obj[0]:
+            for ep in obj:
+                c = ep.get("chain", [])
+                if isinstance(c, list):
+                    chains.append(c)
+        elif isinstance(obj[0], dict) and "obs" in obj[0] and "action" in obj[0]:
+            chains.append(obj)
+    return chains
+
+
+def _collect_pkl_files(paths):
+    files = []
+    for p in paths:
+        if not p:
+            continue
+        if os.path.isdir(p):
+            files.extend(glob.glob(os.path.join(p, "*.pkl")))
+        elif os.path.isfile(p) and p.lower().endswith(".pkl"):
+            files.append(p)
+    return sorted(list(set(files)))
+
+
+def preload_replay_buffer_from_pkl(model, pkl_paths):
+    files = _collect_pkl_files(pkl_paths)
+    inserted = 0
+
+    obs_shape = model.observation_space.shape
+    act_shape = model.action_space.shape
+
+    for fp in files:
+        try:
+            with open(fp, "rb") as f:
+                obj = pickle.load(f)
+            chains = _extract_chains_from_obj(obj)
+        except Exception:
+            continue
+
+        for chain in chains:
+            for tr in chain:
+                try:
+                    obs = np.asarray(tr.get("obs", []), dtype=np.float32).reshape(obs_shape)
+                    next_obs = np.asarray(tr.get("next_obs", []), dtype=np.float32).reshape(obs_shape)
+                    action = np.asarray(tr.get("action", []), dtype=np.float32).reshape(act_shape)
+                    reward = float(tr.get("reward", 0.0))
+                    done = float(bool(tr.get("done", False)))
+                    info = tr.get("info", {}) if isinstance(tr.get("info", {}), dict) else {}
+
+                    model.replay_buffer.add(
+                        np.expand_dims(obs, axis=0),
+                        np.expand_dims(next_obs, axis=0),
+                        np.expand_dims(action, axis=0),
+                        np.array([reward], dtype=np.float32),
+                        np.array([done], dtype=np.float32),
+                        [info],
+                    )
+                    inserted += 1
+                except Exception:
+                    continue
+
+    print(f"[train_SAC] replay preload inserted transitions: {inserted}")
+
+
 def train_sac(go2_cfg, terrain_cfg,
               total_timesteps=20000,
               max_episode_steps=35,
@@ -197,12 +351,24 @@ def train_sac(go2_cfg, terrain_cfg,
               seed=0,
               plot_save_every_steps=2000,
               plot_smooth_window=20,
-              checkpoint_every_steps=10000):
+              checkpoint_every_steps=10000,
+              preload_model_path="",
+              preload_pkl_paths=None,
+              failure_pkl_name="train_failure_chains.pkl",
+              failure_flush_every_episodes=50):
+
+    preload_pkl_paths = preload_pkl_paths or []
 
     def make_env():
         trainer = TerrainTrainer(go2_cfg, terrain_cfg)
         env = TerrainGymEnv(trainer, max_episode_steps=max_episode_steps)
         env = Monitor(env)
+        env = FailureRecordingWrapper(
+            env,
+            out_dir=log_dir,
+            pkl_name=failure_pkl_name,
+            flush_every_episodes=failure_flush_every_episodes,
+        )
         return env
 
     vec_env = DummyVecEnv([make_env])
@@ -215,21 +381,28 @@ def train_sac(go2_cfg, terrain_cfg,
             "(e.g. ['bump'])."
         )
 
-    model = SAC(
-        "MlpPolicy",
-        vec_env,
-        verbose=1,
-        device=device,
-        learning_rate=float(learning_rate),
-        batch_size=int(batch_size),
-        buffer_size=int(buffer_size),
-        learning_starts=int(learning_starts),
-        train_freq=int(train_freq),
-        gradient_steps=int(gradient_steps),
-        tau=float(tau),
-        gamma=float(gamma),
-        seed=int(seed),
-    )
+    if preload_model_path and os.path.exists(preload_model_path):
+        print(f"[train_SAC] loading pretrained model from: {preload_model_path}")
+        model = SAC.load(preload_model_path, env=vec_env, device=device)
+    else:
+        model = SAC(
+            "MlpPolicy",
+            vec_env,
+            verbose=1,
+            device=device,
+            learning_rate=float(learning_rate),
+            batch_size=int(batch_size),
+            buffer_size=int(buffer_size),
+            learning_starts=int(learning_starts),
+            train_freq=int(train_freq),
+            gradient_steps=int(gradient_steps),
+            tau=float(tau),
+            gamma=float(gamma),
+            seed=int(seed),
+        )
+
+    if preload_pkl_paths:
+        preload_replay_buffer_from_pkl(model, preload_pkl_paths)
 
     callback = TrainingLoggerCallback(
         out_dir=log_dir,
@@ -283,6 +456,10 @@ def main():
         plot_save_every_steps=train_config.get("plot_save_every_steps", 2000),
         plot_smooth_window=train_config.get("plot_smooth_window", 20),
         checkpoint_every_steps=train_config.get("checkpoint_every_steps", 10000),
+        preload_model_path=train_config.get("preload_model_path", ""),
+        preload_pkl_paths=train_config.get("preload_pkl_paths", []),
+        failure_pkl_name=train_config.get("failure_pkl_name", "train_failure_chains.pkl"),
+        failure_flush_every_episodes=train_config.get("failure_flush_every_episodes", 50),
     )
 
 

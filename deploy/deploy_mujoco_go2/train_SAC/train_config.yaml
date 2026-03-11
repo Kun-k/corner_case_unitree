@@ -3,7 +3,7 @@ go2_config: "go2.yaml"
 terrain_config: "terrain_config.yaml"
 
 total_timesteps: 60000
-max_episode_steps: 350
+max_episode_steps: 35
 
 # Device / Torch runtime
 # auto | cpu | cuda | cuda:0
@@ -29,6 +29,14 @@ plot_save_every_steps: 2000
 plot_smooth_window: 20
 checkpoint_every_steps: 200
 
-log_name: "sac_0310-rew2"
+# Optional warm-starts
+preload_model_path: ""   # e.g. deploy/deploy_mujoco_go2/train_SAC/train_logs/xxx/model.zip
+preload_pkl_paths: []      # list of dirs/files containing *.pkl transitions
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_0310-rew2.out 2>&1 &
+# Train-time failure recording
+failure_pkl_name: "train_failure_chains.pkl"
+failure_flush_every_episodes: 50
+
+log_name: "sac_0311_1"
+
+# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_0311_1.out 2>&1 &
