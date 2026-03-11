@@ -40,9 +40,9 @@ plot_smooth_window: 20
 # Save model checkpoint every N timesteps.
 checkpoint_every_steps: 200
 
-dense_sample_ratio: 0.3
+dense_sample_ratio: 0.1
 
-log_name: "sac_dense_0310-rew2-ratio30"
+log_name: "sac_dense_0310-rew1-ratio10"
 #log_name: "debug"
 
-#nohup python deploy/deploy_mujoco_go2/train_SAC_dense/train.py >nohup_sac_dense_0310-rew2-ratio30.out 2>&1 &
+#nohup python deploy/deploy_mujoco_go2/train_SAC_dense/train.py >nohup_sac_dense_0310-rew1-ratio10.out 2>&1 &
