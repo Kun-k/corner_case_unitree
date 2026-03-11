@@ -138,7 +138,7 @@ def evaluate_policy(
             has_base_collision = has_base_collision or info_dict["base_collision"]
             has_thigh_collision = has_thigh_collision or info_dict["thigh_collision"]
             has_stuck = has_stuck or info_dict["stuck"]
-            has_failure = has_collision or has_fall or has_stuck
+            has_failure = has_collision or has_fall or has_stuck or has_base_collision or has_thigh_collision
 
             obs = next_obs
             if terminated or truncated:
