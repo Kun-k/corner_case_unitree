@@ -437,6 +437,10 @@ def main():
     total_timesteps = train_config['total_timesteps']
     max_episode_steps = train_config['max_episode_steps']
 
+    preload_pkl_paths = train_config.get("preload_pkl_paths", [])
+    for i in range(len(preload_pkl_paths)):
+        preload_pkl_paths[i] = os.path.join(current_path, preload_pkl_paths[i])
+
     train_sac(
         go2_cfg,
         terrain_cfg,
@@ -457,7 +461,7 @@ def main():
         plot_smooth_window=train_config.get("plot_smooth_window", 20),
         checkpoint_every_steps=train_config.get("checkpoint_every_steps", 10000),
         preload_model_path=train_config.get("preload_model_path", ""),
-        preload_pkl_paths=train_config.get("preload_pkl_paths", []),
+        preload_pkl_paths=preload_pkl_paths,
         failure_pkl_name=train_config.get("failure_pkl_name", "train_failure_chains.pkl"),
         failure_flush_every_episodes=train_config.get("failure_flush_every_episodes", 50),
     )

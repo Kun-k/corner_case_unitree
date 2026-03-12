@@ -15,7 +15,6 @@ allow_tf32: true
 torch_num_threads: 0
 
 # SAC-dense hyperparameters
-learning_starts: 10000
 learning_rate: 0.0003
 batch_size: 256
 buffer_size: 1000000
@@ -40,17 +39,29 @@ plot_smooth_window: 20
 # Save model checkpoint every N timesteps.
 checkpoint_every_steps: 200
 
-dense_sample_ratio: 0.7
-
 # Optional warm-starts
 preload_model_path: ""
-preload_pkl_paths: []
+preload_pkl_paths: [
+  "../train_SAC/eval_logs/random_eval_0311-1",
+  "../train_SAC/eval_logs/random_eval_0311-2",
+  "../train_SAC/eval_logs/random_eval_0311-3",
+  "../train_SAC/eval_logs/random_eval_0311-4",
+  "../train_SAC/eval_logs/random_eval_0311-5",
+  "../train_SAC/eval_logs/random_eval_0311-6",
+  "../train_SAC/eval_logs/random_eval_0311-7",
+  "../train_SAC/eval_logs/random_eval_0311-8",
+]
+
+learning_starts: 0
+
+dense_sample_ratio: 0.0
 
 # Train-time failure recording
 failure_pkl_name: "train_failure_chains.pkl"
 failure_flush_every_episodes: 50
 
-log_name: "sac_dense_0311-ratio70"
-#log_name: "debug"
+#log_name: "sac_dense_0312-preload-ratio70"
+log_name: "debug"
 
-#nohup python deploy/deploy_mujoco_go2/train_SAC_dense/train.py >nohup_sac_dense_0311-ratio70.out 2>&1 &
+#nohup python deploy/deploy_mujoco_go2/train_SAC_dense/train.py >nohup_sac_dense_0312-preload-ratio70.out 2>&1 &
+#nohup python deploy/deploy_mujoco_go2/train_SAC_dense/train.py >debug.out 2>&1 &

@@ -18,7 +18,6 @@ torch_num_threads: 0
 learning_rate: 0.0003
 batch_size: 256
 buffer_size: 1000000
-learning_starts: 100
 train_freq: 1
 gradient_steps: 1
 tau: 0.005
@@ -31,12 +30,23 @@ checkpoint_every_steps: 200
 
 # Optional warm-starts
 preload_model_path: ""   # e.g. deploy/deploy_mujoco_go2/train_SAC/train_logs/xxx/model.zip
-preload_pkl_paths: []      # list of dirs/files containing *.pkl transitions
+preload_pkl_paths: [
+  "../train_SAC/eval_logs/random_eval_0311-1",
+  "../train_SAC/eval_logs/random_eval_0311-2",
+  "../train_SAC/eval_logs/random_eval_0311-3",
+  "../train_SAC/eval_logs/random_eval_0311-4",
+  "../train_SAC/eval_logs/random_eval_0311-5",
+  "../train_SAC/eval_logs/random_eval_0311-6",
+  "../train_SAC/eval_logs/random_eval_0311-7",
+  "../train_SAC/eval_logs/random_eval_0311-8",
+]
+
+learning_starts: 100
 
 # Train-time failure recording
-failure_pkl_name: "train_failure_chains.pkl"
+failure_pkl_name: "collision_failures.pkl"
 failure_flush_every_episodes: 50
 
-log_name: "sac_0311_1"
+log_name: "sac_0312-preload"
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_0311_1.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_0312-preload.out 2>&1 &
