@@ -7,7 +7,7 @@ max_episode_steps: 35
 
 # Device / Torch runtime
 # auto | cpu | cuda | cuda:0
-device: "cuda:0"
+device: "cuda:1"
 seed: 0
 torch_deterministic: false
 cudnn_benchmark: true
@@ -47,6 +47,6 @@ learning_starts: 100
 failure_pkl_name: "collision_failures.pkl"
 failure_flush_every_episodes: 50
 
-log_name: "sac_0312-preload"
+log_name: "sac_0312-rew1-preload"
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_0312-preload.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_0312-rew1-preload.out 2>&1 &

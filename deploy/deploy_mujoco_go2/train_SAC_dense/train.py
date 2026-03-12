@@ -15,6 +15,49 @@ from deploy.deploy_mujoco_go2.train_SAC_dense.callbacks import DenseTrainingLogg
 from deploy.deploy_mujoco_go2.train_SAC_dense.dense_replay_buffer import FailureReplayBuffer
 
 
+def _extract_reward_cfg_from_terrain_yaml(terrain_cfg_file: str):
+    if not terrain_cfg_file or not os.path.exists(terrain_cfg_file):
+        return {}
+    try:
+        with open(terrain_cfg_file, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        if not isinstance(cfg, dict):
+            return {}
+        reward_cfg = cfg.get("event_and_reward", {})
+        return reward_cfg if isinstance(reward_cfg, dict) else {}
+    except Exception:
+        return {}
+
+
+def _recompute_reward_from_info(info: dict, reward_cfg: dict) -> float:
+    if not reward_cfg:
+        return 0.0
+
+    info = info or {}
+    r = 0.0
+    if bool(info.get("fallen", False)):
+        r += float(reward_cfg.get("fall_reward", 0.0))
+    if bool(info.get("base_collision", False)):
+        r += float(reward_cfg.get("base_collision_reward", 0.0))
+    if bool(info.get("thigh_collision", False)):
+        r += float(reward_cfg.get("thigh_collision_reward", 0.0))
+    if bool(info.get("collided", False)):
+        r += float(reward_cfg.get("collision_reward", 0.0))
+    if bool(info.get("stuck", False)):
+        r += float(reward_cfg.get("stuck_reward", 0.0))
+
+    if "tilt" in info:
+        r += float(reward_cfg.get("tilt_reward_scale", 0.0)) * float(info.get("tilt", 0.0))
+
+    if "speed" in info:
+        target_speed = float(reward_cfg.get("target_speed", 0.0))
+        speed = float(info.get("speed", 0.0))
+        speed_loss = max(0.0, target_speed - speed)
+        r += float(reward_cfg.get("speed_reward_scale", 0.0)) * speed_loss
+
+    return float(r)
+
+
 class FailureRecordingWrapper(gym.Wrapper):
     """Record failure episodes during training and dump to PKL."""
 
@@ -169,7 +212,7 @@ def _collect_pkl_files(paths):
     return sorted(list(set(files)))
 
 
-def preload_replay_buffer_from_pkl(model, pkl_paths):
+def preload_replay_buffer_from_pkl(model, pkl_paths, reward_cfg=None):
     files = _collect_pkl_files(pkl_paths)
     inserted = 0
 
@@ -190,9 +233,11 @@ def preload_replay_buffer_from_pkl(model, pkl_paths):
                     obs = np.asarray(tr.get("obs", []), dtype=np.float32).reshape(obs_shape)
                     next_obs = np.asarray(tr.get("next_obs", []), dtype=np.float32).reshape(obs_shape)
                     action = np.asarray(tr.get("action", []), dtype=np.float32).reshape(act_shape)
-                    reward = float(tr.get("reward", 0.0))
-                    done = float(bool(tr.get("done", False)))
                     info = tr.get("info", {}) if isinstance(tr.get("info", {}), dict) else {}
+                    reward = _recompute_reward_from_info(info, reward_cfg or {})
+                    if not (reward_cfg or {}):
+                        reward = float(tr.get("reward", 0.0))
+                    done = float(bool(tr.get("done", False)))
 
                     model.replay_buffer.add(
                         np.expand_dims(obs, axis=0),
@@ -206,7 +251,7 @@ def preload_replay_buffer_from_pkl(model, pkl_paths):
                 except Exception:
                     continue
 
-    print(f"[train_SAC_dense] replay preload inserted transitions: {inserted}")
+    print(f"[train_SAC_dense] replay preload inserted transitions: {inserted}, reward_recompute={'on' if (reward_cfg or {}) else 'off'}")
 
 
 def train_sac_dense(
@@ -235,6 +280,7 @@ def train_sac_dense(
     preload_pkl_paths=None,
     failure_pkl_name="train_failure_chains.pkl",
     failure_flush_every_episodes=50,
+    reward_cfg=None,
 ):
     preload_pkl_paths = preload_pkl_paths or []
 
@@ -284,7 +330,7 @@ def train_sac_dense(
         )
 
     if preload_pkl_paths:
-        preload_replay_buffer_from_pkl(model, preload_pkl_paths)
+        preload_replay_buffer_from_pkl(model, preload_pkl_paths, reward_cfg=reward_cfg)
 
     callback = DenseTrainingLogger(
         out_dir=log_dir,
@@ -311,6 +357,7 @@ def main():
     log_dir = f"{current_path}/train_logs/{train_config['log_name']}"
     os.makedirs(log_dir, exist_ok=True)
     terrain_cfg_file = os.path.join(current_path, train_config["terrain_config"])
+    reward_cfg = _extract_reward_cfg_from_terrain_yaml(terrain_cfg_file)
     train_cfg_file = os.path.join(current_path, train_config_file)
     os.system(f"cp {terrain_cfg_file} {log_dir}")
     os.system(f"cp {train_cfg_file} {log_dir}")
@@ -348,6 +395,7 @@ def main():
         preload_pkl_paths=preload_pkl_paths,
         failure_pkl_name=train_config.get("failure_pkl_name", "train_failure_chains.pkl"),
         failure_flush_every_episodes=train_config.get("failure_flush_every_episodes", 50),
+        reward_cfg=reward_cfg,
     )
 
 

@@ -44,10 +44,10 @@ event_and_reward:
   thigh_collision_reward: 2.0
 
   # ===== 失稳 =====
-  tilt_reward_scale: 0.1
+  tilt_reward_scale: 0
 
   # ===== 速度惩罚 =====
-  target_speed: 0.5
+  target_speed: 0
   speed_reward_scale: 0.5
   stuck_speed_threshold: 0.05
   stuck_reward: 4.0
