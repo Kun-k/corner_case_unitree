@@ -5,8 +5,13 @@ from typing import List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 
 from deploy.deploy_mujoco_go2.train_offline.data_io import get_log_dirs
+from deploy.deploy_mujoco_go2.reward_recompute_utils import (
+    load_reward_cfg_from_yaml,
+    recompute_fail_flags_from_info,
+)
 
 
 RHW_KEYS = [
@@ -74,12 +79,25 @@ def _load_local_rhw_from_csv(csv_path: str) -> dict:
     return ep_to_rhw
 
 
-def _extract_failure_episodes_from_obj(obj) -> List[int]:
+def _episode_has_effective_failure(chain: list, reward_cfg: dict) -> bool:
+    if not isinstance(chain, list):
+        return False
+    for tr in chain:
+        info = tr.get("info", {}) if isinstance(tr, dict) else {}
+        if bool(recompute_fail_flags_from_info(info, reward_cfg).get("any_fail", False)):
+            return True
+    return False
+
+
+def _extract_failure_episodes_from_obj(obj, reward_cfg: dict) -> List[int]:
     episodes: List[int] = []
 
     if isinstance(obj, list):
         for item in obj:
             if isinstance(item, dict) and "episode" in item:
+                if isinstance(item.get("chain", None), list):
+                    if not _episode_has_effective_failure(item.get("chain", []), reward_cfg):
+                        continue
                 try:
                     episodes.append(int(item["episode"]))
                 except Exception:
@@ -100,7 +118,7 @@ def _extract_failure_episodes_from_obj(obj) -> List[int]:
     return episodes
 
 
-def _load_failure_episodes_from_pkl(pkl_path: str) -> List[int]:
+def _load_failure_episodes_from_pkl(pkl_path: str, reward_cfg: dict) -> List[int]:
     if not os.path.exists(pkl_path):
         return []
     try:
@@ -108,7 +126,7 @@ def _load_failure_episodes_from_pkl(pkl_path: str) -> List[int]:
             obj = pickle.load(f)
     except Exception:
         return []
-    return _extract_failure_episodes_from_obj(obj)
+    return _extract_failure_episodes_from_obj(obj, reward_cfg)
 
 
 def _extract_rhw_from_transition(tr: dict):
@@ -186,7 +204,7 @@ def _normalize_episode_base(fail_episodes: List[int], total_episodes: int) -> np
     return arr + 1
 
 
-def _build_global_curve(log_dirs: List[str]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _build_global_curve(log_dirs: List[str], reward_cfg: dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     episode_offset = 0
     global_failure_episodes: List[int] = []
     global_rhw_points = {}
@@ -196,7 +214,7 @@ def _build_global_curve(log_dirs: List[str]) -> Tuple[np.ndarray, np.ndarray, np
         pkl_path = os.path.join(d, "collision_failures.pkl")
 
         total_episodes = _read_total_episodes_from_csv(csv_path)
-        local_fail_eps = _load_failure_episodes_from_pkl(pkl_path)
+        local_fail_eps = _load_failure_episodes_from_pkl(pkl_path, reward_cfg=reward_cfg)
         local_fail_eps = _normalize_episode_base(local_fail_eps, total_episodes)
 
         local_rhw_csv = _load_local_rhw_from_csv(csv_path)
@@ -280,11 +298,17 @@ def _save_csv(
 def main() -> None:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     logs_cfg_path = os.path.join(base_dir, "logs_config.yaml")
+    train_cfg_path = os.path.join(base_dir, "train_config.yaml")
 
     log_dirs, output_dir = get_log_dirs(logs_cfg_path)
+    with open(train_cfg_path, "r", encoding="utf-8") as f:
+        train_cfg = yaml.safe_load(f) or {}
+    terrain_cfg_path = os.path.join(base_dir, train_cfg.get("terrain_config", "terrain_config.yaml"))
+    reward_cfg = load_reward_cfg_from_yaml(terrain_cfg_path)
+
     os.makedirs(output_dir, exist_ok=True)
 
-    episodes, fail_rate_mean, std_shadow, mean_var_est, rhw_series = _build_global_curve(log_dirs)
+    episodes, fail_rate_mean, std_shadow, mean_var_est, rhw_series = _build_global_curve(log_dirs, reward_cfg=reward_cfg)
     if episodes.size == 0:
         raise RuntimeError("No valid episodes found from configured log folders (CSV/PKL).")
 

@@ -15,6 +15,10 @@ from deploy.deploy_mujoco_go2.train_offline.data_io import (
     load_transition_chains_from_logs,
     stack_state_action,
 )
+from deploy.deploy_mujoco_go2.reward_recompute_utils import (
+    load_reward_cfg_from_yaml,
+    recompute_fail_flags_from_info,
+)
 
 
 def configure_torch_runtime(cfg: dict):
@@ -51,15 +55,9 @@ class FailureClassifier(nn.Module):
         return self.net(x).squeeze(-1)
 
 
-def transition_label(tr: dict) -> float:
+def transition_label(tr: dict, reward_cfg: dict) -> float:
     info = tr.get("info", {})
-    failure = bool(
-        info.get("fallen", False)
-        # or info.get("collided", False)
-        or info.get("base_collision", False)
-        or info.get("thigh_collision", False)
-        or info.get("stuck", False)
-    )
+    failure = bool(recompute_fail_flags_from_info(info, reward_cfg).get("any_fail", False))
     return 1.0 if failure else 0.0
 
 
@@ -194,14 +192,14 @@ def _save_confusion_csv(path: str, train_cm: dict, val_cm: dict, test_cm: dict):
         writer.writerow(["test", test_cm["tp"], test_cm["fp"], test_cm["tn"], test_cm["fn"]])
 
 
-def _expand_fail_labels_in_chain(chain: list, pre_k: int) -> np.ndarray:
+def _expand_fail_labels_in_chain(chain: list, pre_k: int, reward_cfg: dict) -> np.ndarray:
     """Mark failure frames and their preceding k frames as positive within a chain."""
     n = len(chain)
     labels = np.zeros((n,), dtype=np.float32)
     if n == 0:
         return labels
 
-    base_fail = np.asarray([transition_label(tr) for tr in chain], dtype=np.float32)
+    base_fail = np.asarray([transition_label(tr, reward_cfg) for tr in chain], dtype=np.float32)
     fail_indices = np.where(base_fail > 0.5)[0]
     if fail_indices.size == 0:
         return labels
@@ -217,13 +215,13 @@ def _expand_fail_labels_in_chain(chain: list, pre_k: int) -> np.ndarray:
     return labels
 
 
-def _flatten_chains_and_labels(chains: list, pre_k: int):
+def _flatten_chains_and_labels(chains: list, pre_k: int, reward_cfg: dict):
     transitions = []
     labels = []
     for chain in chains:
         if not isinstance(chain, list) or len(chain) == 0:
             continue
-        chain_labels = _expand_fail_labels_in_chain(chain, pre_k)
+        chain_labels = _expand_fail_labels_in_chain(chain, pre_k, reward_cfg)
         for i, tr in enumerate(chain):
             if isinstance(tr, dict) and "obs" in tr and "action" in tr:
                 transitions.append(tr)
@@ -244,13 +242,15 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
 
     logs_cfg_path = os.path.join(base_dir, cfg.get("logs_config", "logs_config.yaml"))
+    reward_cfg_path = os.path.join(base_dir, cfg.get("terrain_config", "terrain_config.yaml"))
+    reward_cfg = load_reward_cfg_from_yaml(reward_cfg_path)
     log_dirs, _ = get_log_dirs(logs_cfg_path)
     loading_opts = get_log_loading_options(logs_cfg_path)
     fail_keep_k = int(loading_opts.get("consecutive_fail_keep_k", 0))
     chains = load_transition_chains_from_logs(log_dirs, consecutive_fail_keep_k=fail_keep_k)
 
     pre_k = int(cfg.get("classifier", {}).get("fail_preceding_k", 0))
-    transitions, labels = _flatten_chains_and_labels(chains, pre_k=pre_k)
+    transitions, labels = _flatten_chains_and_labels(chains, pre_k=pre_k, reward_cfg=reward_cfg)
 
     states, actions = stack_state_action(transitions)
     if states.shape[0] == 0:
@@ -390,6 +390,7 @@ def main():
                 "concat_action_to_obs": bool(use_action_in_obs),
                 "fail_preceding_k": int(pre_k),
                 "consecutive_fail_keep_k": int(fail_keep_k),
+                "reward_cfg_path": str(reward_cfg_path),
                 "val_split": float(val_split),
                 "test_split": float(test_split),
                 "test_loss": float(test_loss),

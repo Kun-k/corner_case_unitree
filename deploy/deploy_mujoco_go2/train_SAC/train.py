@@ -17,50 +17,19 @@ except ImportError:
     import gym
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
-from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file
+from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file, _cap_consecutive_failures
+from deploy.deploy_mujoco_go2.reward_recompute_utils import (
+    load_reward_cfg_from_yaml,
+    recompute_reward_from_info,
+)
 
 
 def _extract_reward_cfg_from_terrain_yaml(terrain_cfg_file: str):
-    if not terrain_cfg_file or not os.path.exists(terrain_cfg_file):
-        return {}
-    try:
-        with open(terrain_cfg_file, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        if not isinstance(cfg, dict):
-            return {}
-        reward_cfg = cfg.get("event_and_reward", {})
-        return reward_cfg if isinstance(reward_cfg, dict) else {}
-    except Exception:
-        return {}
+    return load_reward_cfg_from_yaml(terrain_cfg_file)
 
 
 def _recompute_reward_from_info(info: dict, reward_cfg: dict) -> float:
-    if not reward_cfg:
-        return 0.0
-
-    info = info or {}
-    r = 0.0
-    if bool(info.get("fallen", False)):
-        r += float(reward_cfg.get("fall_reward", 0.0))
-    if bool(info.get("base_collision", False)):
-        r += float(reward_cfg.get("base_collision_reward", 0.0))
-    if bool(info.get("thigh_collision", False)):
-        r += float(reward_cfg.get("thigh_collision_reward", 0.0))
-    if bool(info.get("collided", False)):
-        r += float(reward_cfg.get("collision_reward", 0.0))
-    if bool(info.get("stuck", False)):
-        r += float(reward_cfg.get("stuck_reward", 0.0))
-
-    if "tilt" in info:
-        r += float(reward_cfg.get("tilt_reward_scale", 0.0)) * float(info.get("tilt", 0.0))
-
-    if "speed" in info:
-        target_speed = float(reward_cfg.get("target_speed", 0.0))
-        speed = float(info.get("speed", 0.0))
-        speed_loss = max(0.0, target_speed - speed)
-        r += float(reward_cfg.get("speed_reward_scale", 0.0)) * speed_loss
-
-    return float(r)
+    return recompute_reward_from_info(info, reward_cfg)
 
 
 class FailureRecordingWrapper(gym.Wrapper):

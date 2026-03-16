@@ -9,6 +9,9 @@ torch_num_threads: 0
 
 # Shared paths
 logs_config: "logs_config.yaml"
+
+# Reward config path for fail/reward recomputation.
+# If terrain_config_path is set, it has higher priority.
 terrain_config: "terrain_config.yaml"
 
 classifier:
