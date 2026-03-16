@@ -52,13 +52,14 @@ goal_random_seed: 0
 
 # Goal switching
 # consider reached when distance <= goal_reach_dist for goal_reach_hold_steps control cycles
-goal_reach_dist: 0.20
+goal_reach_dist: 0.2
 goal_reach_hold_steps: 3
 
 # Convert position error to world velocity command (P controller)
 goal_kp_pos: 1.2
+goal_kp_heading: 0.2
 goal_max_lin_vel_x: 1.0
-goal_max_lin_vel_y: 0.8
+goal_max_lin_vel_y: 1.0
 
 init_skip_time: 2
 

@@ -71,12 +71,6 @@ def compute_navigation_cmd(data, goal_xy, goal_heading, cfg):
     delta = goal_xy - pos_xy
     dist = float(np.linalg.norm(delta))
 
-    # Desired heading: explicit goal heading (if provided), otherwise face goal point.
-    if goal_heading is None:
-        heading_target = float(np.arctan2(delta[1], delta[0])) if dist > 1e-6 else float(quat_to_heading_w(data.qpos[3:7]))
-    else:
-        heading_target = float(goal_heading)
-
     # World-frame velocity command from simple proportional position control.
     kp_pos = float(cfg["goal_kp_pos"])
     vx_w = kp_pos * float(delta[0])
@@ -97,6 +91,15 @@ def compute_navigation_cmd(data, goal_xy, goal_heading, cfg):
     cmd = np.zeros(3, dtype=np.float32)
     cmd[0] = np.clip(vx_b / max(max_vx, 1e-6), -1.0, 1.0)
     cmd[1] = np.clip(vy_b / max(max_vy, 1e-6), -1.0, 1.0)
+
+    # Desired heading: explicit goal heading (if provided), otherwise face goal point.
+    if goal_heading is None:
+        goal_heading = float(np.arctan2(delta[1], delta[0])) if dist > 1e-6 else float(quat_to_heading_w(data.qpos[3:7]))
+    else:
+        goal_heading = float(goal_heading)
+
+    kp_heading = float(cfg["goal_kp_heading"])
+    heading_target = yaw + kp_heading * (float(goal_heading) - yaw)
 
     return cmd, heading_target, dist
 
@@ -186,6 +189,7 @@ def main():
             if counter % control_decimation == 0:
                 cmd, heading_target, dist = compute_navigation_cmd(d, goal_xy, goal_heading, cfg)
                 cmd = update_command(d, cmd, heading_stiffness, heading_target)
+                print(cmd)
 
                 # Build policy observation.
                 qj = d.qpos[7:]
