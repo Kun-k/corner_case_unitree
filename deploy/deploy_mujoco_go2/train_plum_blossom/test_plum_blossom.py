@@ -13,12 +13,12 @@ def run_plum_blossom_demo():
 
     # 1) Generate plum-blossom piles centered at world origin.
     trainer.terrain_changer.generate_plum_blossom_piles(
-        num_x=6,
-        num_y=6,
+        num_x=10,
+        num_y=10,
         center_world=(0.0, 0.0),
-        base_height=0.12,
-        pile_size_m=0.09,
-        gap_m=0.01,
+        base_height=1.0,
+        pile_size_m=0.2,
+        gap_m=0,
     )
     if trainer.render:
         trainer.viewer.update_hfield(trainer.terrain_changer.hfield_id)
@@ -36,7 +36,7 @@ def run_plum_blossom_demo():
             for _ in range(5):
                 ix = int(rng.integers(0, 6))
                 iy = int(rng.integers(0, 6))
-                delta_h = float(rng.uniform(-0.01, 0.02))
+                delta_h = float(rng.uniform(-0.2, 0.2))
                 controls.append((ix, iy, delta_h))
             trainer.terrain_changer.update_plum_blossom_piles(controls)
             if trainer.render:
