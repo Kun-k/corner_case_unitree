@@ -38,5 +38,10 @@ preload_model_path: ""   # e.g. deploy/deploy_mujoco_go2/train_PPO/train_logs/xx
 failure_pkl_name: "collision_failures.pkl"
 failure_flush_every_episodes: 50
 
+# Sampling-time/recording-time filter:
+# keep only first K frames in each consecutive fail+stuck run.
+# 0 means do not trim.
+consecutive_fail_keep_k: 0
+
 log_name: "ppo_0312"
 

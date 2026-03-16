@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import yaml
 from stable_baselines3 import SAC
+from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -17,7 +18,7 @@ except ImportError:
     import gym
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
-from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file, _cap_consecutive_failures
+from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file
 from deploy.deploy_mujoco_go2.reward_recompute_utils import (
     load_reward_cfg_from_yaml,
     recompute_reward_from_info,
@@ -254,6 +255,56 @@ class TrainingLoggerCallback(BaseCallback):
         plt.close(fig)
 
 
+class StuckFilteredReplayBuffer(ReplayBuffer):
+    """ReplayBuffer that trims consecutive fail+stuck transitions during collection."""
+
+    def __init__(self, *args, consecutive_fail_keep_k: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.consecutive_fail_keep_k = int(max(0, consecutive_fail_keep_k))
+        self._stuck_fail_run = np.zeros((self.n_envs,), dtype=np.int32)
+
+    def add(self, obs, next_obs, action, reward, done, infos):
+        if not isinstance(infos, (list, tuple)):
+            return super().add(obs, next_obs, action, reward, done, infos)
+
+        if self.consecutive_fail_keep_k <= 0:
+            return super().add(obs, next_obs, action, reward, done, infos)
+
+        keep = np.ones((len(infos),), dtype=np.bool_)
+        for env_i, info in enumerate(infos):
+            if not isinstance(info, dict):
+                self._stuck_fail_run[env_i] = 0
+                continue
+
+            is_fail = bool(
+                info.get("fallen", False)
+                or info.get("collided", False)
+                or info.get("base_collision", False)
+                or info.get("thigh_collision", False)
+                or info.get("stuck", False)
+            )
+            is_stuck = bool(info.get("stuck", False))
+
+            if is_fail and is_stuck:
+                self._stuck_fail_run[env_i] += 1
+                if self._stuck_fail_run[env_i] > self.consecutive_fail_keep_k:
+                    keep[env_i] = False
+            else:
+                self._stuck_fail_run[env_i] = 0
+
+        if keep.size == 0 or not np.any(keep):
+            return
+
+        super().add(
+            obs[keep],
+            next_obs[keep],
+            action[keep],
+            reward[keep],
+            done[keep],
+            [infos[i] for i in np.where(keep)[0]],
+        )
+
+
 def configure_torch_runtime(cfg: dict):
     seed = int(cfg.get("seed", 0))
     torch.manual_seed(seed)
@@ -364,25 +415,27 @@ def train_sac(go2_cfg, terrain_cfg,
             "(e.g. ['bump'])."
         )
 
+    model = SAC(
+        "MlpPolicy",
+        vec_env,
+        verbose=1,
+        device=device,
+        learning_rate=float(learning_rate),
+        batch_size=int(batch_size),
+        buffer_size=int(buffer_size),
+        learning_starts=int(learning_starts),
+        train_freq=int(train_freq),
+        gradient_steps=int(gradient_steps),
+        tau=float(tau),
+        gamma=float(gamma),
+        replay_buffer_class=StuckFilteredReplayBuffer,
+        replay_buffer_kwargs={"consecutive_fail_keep_k": int(consecutive_fail_keep_k)},
+        seed=int(seed),
+    )
+
     if preload_model_path and os.path.exists(preload_model_path):
-        print(f"[train_SAC] loading pretrained model from: {preload_model_path}")
-        model = SAC.load(preload_model_path, env=vec_env, device=device)
-    else:
-        model = SAC(
-            "MlpPolicy",
-            vec_env,
-            verbose=1,
-            device=device,
-            learning_rate=float(learning_rate),
-            batch_size=int(batch_size),
-            buffer_size=int(buffer_size),
-            learning_starts=int(learning_starts),
-            train_freq=int(train_freq),
-            gradient_steps=int(gradient_steps),
-            tau=float(tau),
-            gamma=float(gamma),
-            seed=int(seed),
-        )
+        print(f"[train_SAC] warm-loading pretrained weights from: {preload_model_path}")
+        model.set_parameters(preload_model_path, exact_match=False, device=device)
 
     if preload_pkl_paths:
         preload_replay_buffer_from_pkl(

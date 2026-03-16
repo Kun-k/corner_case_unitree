@@ -244,27 +244,31 @@ def train_sac_dense(
             "Please check terrain config and ensure terrain_action.terrain_types includes controllable types (e.g. ['bump'])."
         )
 
+    model = SAC(
+        "MlpPolicy",
+        vec_env,
+        verbose=1,
+        device=device,
+        learning_rate=float(learning_rate),
+        batch_size=int(batch_size),
+        buffer_size=int(buffer_size),
+        learning_starts=int(learning_starts),
+        train_freq=int(train_freq),
+        gradient_steps=int(gradient_steps),
+        tau=float(tau),
+        gamma=float(gamma),
+        replay_buffer_class=FailureReplayBuffer,
+        replay_buffer_kwargs={
+            "reward_threshold": float(reward_threshold),
+            "dense_sample_ratio": dense_sample_ratio,
+            "consecutive_fail_keep_k": int(consecutive_fail_keep_k),
+        },
+        seed=int(seed),
+    )
+
     if preload_model_path and os.path.exists(preload_model_path):
-        print(f"[train_SAC_dense] loading pretrained model from: {preload_model_path}")
-        model = SAC.load(preload_model_path, env=vec_env, device=device)
-    else:
-        model = SAC(
-            "MlpPolicy",
-            vec_env,
-            verbose=1,
-            device=device,
-            learning_rate=float(learning_rate),
-            batch_size=int(batch_size),
-            buffer_size=int(buffer_size),
-            learning_starts=int(learning_starts),
-            train_freq=int(train_freq),
-            gradient_steps=int(gradient_steps),
-            tau=float(tau),
-            gamma=float(gamma),
-            replay_buffer_class=FailureReplayBuffer,
-            replay_buffer_kwargs={"reward_threshold": float(reward_threshold), "dense_sample_ratio": dense_sample_ratio},
-            seed=int(seed),
-        )
+        print(f"[train_SAC_dense] warm-loading pretrained weights from: {preload_model_path}")
+        model.set_parameters(preload_model_path, exact_match=False, device=device)
 
     if preload_pkl_paths:
         preload_replay_buffer_from_pkl(

@@ -13,12 +13,14 @@ class FailureReplayBuffer(ReplayBuffer):
       failure-relevant or cumulative reward is high.
     """
 
-    def __init__(self, *args, reward_threshold=8.0, dense_sample_ratio=0.7, **kwargs):
+    def __init__(self, *args, reward_threshold=8.0, dense_sample_ratio=0.7, consecutive_fail_keep_k=0, **kwargs):
         super().__init__(*args, **kwargs)
         self.reward_threshold = float(reward_threshold)
         self.dense_sample_ratio = float(np.clip(dense_sample_ratio, 0.0, 1.0))
+        self.consecutive_fail_keep_k = int(max(0, consecutive_fail_keep_k))
         self._pending = [[] for _ in range(self.n_envs)]
         self._episode_reward = np.zeros((self.n_envs,), dtype=np.float32)
+        self._stuck_fail_run = np.zeros((self.n_envs,), dtype=np.int32)
         # True means this row was inserted as dense-selected transition.
         self._dense_mask = np.zeros((self.buffer_size,), dtype=np.bool_)
 
@@ -59,11 +61,26 @@ class FailureReplayBuffer(ReplayBuffer):
         else:
             safe_infos = [dict(dense_selected=False) for _ in range(self.n_envs)]
 
-        super().add(obs, next_obs, action, reward, done, safe_infos)
+        keep = np.ones((self.n_envs,), dtype=np.bool_)
+        if self.consecutive_fail_keep_k > 0:
+            for env_idx in range(self.n_envs):
+                info = safe_infos[env_idx] if env_idx < len(safe_infos) else {}
+                is_fail = self._is_failure_info(info)
+                is_stuck = bool(info.get("stuck", False)) if isinstance(info, dict) else False
 
-        # Mark base stream as non-dense-selected.
-        inserted_idx = (self.pos - 1) % self.buffer_size
-        self._dense_mask[inserted_idx] = False
+                if is_fail and is_stuck:
+                    self._stuck_fail_run[env_idx] += 1
+                    if self._stuck_fail_run[env_idx] > self.consecutive_fail_keep_k:
+                        keep[env_idx] = False
+                else:
+                    self._stuck_fail_run[env_idx] = 0
+
+        if np.any(keep):
+            super().add(obs[keep], next_obs[keep], action[keep], reward[keep], done[keep], [safe_infos[i] for i in np.where(keep)[0]])
+
+            # Mark base stream as non-dense-selected.
+            inserted_idx = (self.pos - 1) % self.buffer_size
+            self._dense_mask[inserted_idx] = False
 
         # Keep episode-level cache and duplicate selected episodes for bias.
         obs = np.asarray(obs)
@@ -82,8 +99,9 @@ class FailureReplayBuffer(ReplayBuffer):
                 float(done[env_idx]),
                 info,
             )
-            self._pending[env_idx].append(tr)
-            self._episode_reward[env_idx] += float(reward[env_idx])
+            if keep[env_idx]:
+                self._pending[env_idx].append(tr)
+                self._episode_reward[env_idx] += float(reward[env_idx])
 
             if bool(done[env_idx]):
                 ep = self._pending[env_idx]
