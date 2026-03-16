@@ -189,6 +189,11 @@ class Terrain:
         elif choice == 6:
             # print("choice:  gap terrain")
             gap_terrain(terrain, gap_size=gap_size, platform_size=3.)
+        elif choice == 7:
+            # print("choice:  random uniform terrain")
+            # terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.)  # 生成更陡峭的uniform
+            terrain_utils.random_uniform_terrain(terrain, min_height=-0.20, max_height=0.20, step=0.005,
+                                                 downsampled_scale=0.2)  # -0.05, 0.05, 0.005, 0.2
         elif choice == 10:  # TODO 这里生成对抗测试的地形
             ...
         else:
