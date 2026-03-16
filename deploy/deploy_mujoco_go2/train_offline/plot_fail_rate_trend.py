@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
-from deploy.deploy_mujoco_go2.train_offline.data_io import get_log_dirs
+from deploy.deploy_mujoco_go2.train_offline.data_io import get_log_dirs_and_output_from_train_cfg
 from deploy.deploy_mujoco_go2.reward_recompute_utils import (
     load_reward_cfg_from_yaml,
     recompute_fail_flags_from_info,
@@ -297,12 +297,11 @@ def _save_csv(
 
 def main() -> None:
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    logs_cfg_path = os.path.join(base_dir, "logs_config.yaml")
     train_cfg_path = os.path.join(base_dir, "train_config.yaml")
 
-    log_dirs, output_dir = get_log_dirs(logs_cfg_path)
     with open(train_cfg_path, "r", encoding="utf-8") as f:
         train_cfg = yaml.safe_load(f) or {}
+    log_dirs, output_dir = get_log_dirs_and_output_from_train_cfg(train_cfg, base_dir)
     terrain_cfg_path = os.path.join(base_dir, train_cfg.get("terrain_config", "terrain_config.yaml"))
     reward_cfg = load_reward_cfg_from_yaml(terrain_cfg_path)
 

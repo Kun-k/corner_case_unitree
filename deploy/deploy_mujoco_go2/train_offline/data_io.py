@@ -40,6 +40,33 @@ def get_log_loading_options(logs_config_path: str) -> Dict:
     }
 
 
+def _build_states_output_dir_from_train_cfg(train_cfg: Dict, base_dir: str) -> str:
+    states_cfg = train_cfg.get("states_logs", {}) if isinstance(train_cfg, dict) else {}
+    if isinstance(states_cfg, dict) and states_cfg.get("output_dir", None):
+        return _resolve_path(base_dir, str(states_cfg["output_dir"]))
+
+    log_name = "offline_stats"
+    if isinstance(states_cfg, dict) and states_cfg.get("log_name", None):
+        log_name = str(states_cfg["log_name"])
+    elif isinstance(train_cfg, dict) and train_cfg.get("log_name", None):
+        log_name = str(train_cfg["log_name"])
+    return os.path.join(base_dir, "states_logs", log_name)
+
+
+def get_log_dirs_and_output_from_train_cfg(train_cfg: Dict, base_dir: str) -> Tuple[List[str], str]:
+    """Resolve log_dirs/output_dir from merged train_config, fallback to legacy logs_config.yaml."""
+    log_dirs_cfg = train_cfg.get("log_dirs", []) if isinstance(train_cfg, dict) else []
+    log_dirs = [_resolve_path(base_dir, str(p)) for p in log_dirs_cfg]
+    output_dir = _build_states_output_dir_from_train_cfg(train_cfg, base_dir)
+    return log_dirs, output_dir
+
+
+def get_log_loading_options_from_train_cfg(train_cfg: Dict, base_dir: str) -> Dict:
+    return {
+        "consecutive_fail_keep_k": int(train_cfg.get("consecutive_fail_keep_k", 0)),
+    }
+
+
 def load_transition_chains_from_logs(log_dirs: List[str], consecutive_fail_keep_k: int = 0) -> List[List[Dict]]:
     """Load filtered transition chains (episode-wise) from configured log dirs."""
     chains_out: List[List[Dict]] = []

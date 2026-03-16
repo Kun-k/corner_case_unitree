@@ -10,8 +10,8 @@ import torch.optim as optim
 import yaml
 
 from deploy.deploy_mujoco_go2.train_offline.data_io import (
-    get_log_loading_options,
-    get_log_dirs,
+    get_log_dirs_and_output_from_train_cfg,
+    get_log_loading_options_from_train_cfg,
     load_transition_chains_from_logs,
     stack_state_action,
 )
@@ -237,15 +237,15 @@ def main():
 
     configure_torch_runtime(cfg)
 
-    log_name = cfg.get("log_name", "offline_default")
-    log_dir = os.path.join(base_dir, "train_logs", log_name, "classifier")
+    classifier_cfg = cfg.get("classifier", {}) if isinstance(cfg, dict) else {}
+    classifier_log_name = classifier_cfg.get("log_name", cfg.get("log_name", "offline_default"))
+    log_dir = os.path.join(base_dir, "classifier", str(classifier_log_name))
     os.makedirs(log_dir, exist_ok=True)
 
-    logs_cfg_path = os.path.join(base_dir, cfg.get("logs_config", "logs_config.yaml"))
     reward_cfg_path = os.path.join(base_dir, cfg.get("terrain_config", "terrain_config.yaml"))
     reward_cfg = load_reward_cfg_from_yaml(reward_cfg_path)
-    log_dirs, _ = get_log_dirs(logs_cfg_path)
-    loading_opts = get_log_loading_options(logs_cfg_path)
+    log_dirs, _ = get_log_dirs_and_output_from_train_cfg(cfg, base_dir)
+    loading_opts = get_log_loading_options_from_train_cfg(cfg, base_dir)
     fail_keep_k = int(loading_opts.get("consecutive_fail_keep_k", 0))
     chains = load_transition_chains_from_logs(log_dirs, consecutive_fail_keep_k=fail_keep_k)
 
