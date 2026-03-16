@@ -64,8 +64,38 @@ def _extract_chains_from_obj(obj) -> List[List[Dict]]:
     return chains
 
 
-def load_transitions_from_logs(log_dirs: List[str]) -> List[Dict]:
-    transitions: List[Dict] = []
+def _is_stuck_transition(tr: Dict) -> bool:
+    if not isinstance(tr, dict):
+        return False
+    if "stuck" in tr:
+        return bool(tr.get("stuck", False))
+    info = tr.get("info", {})
+    if isinstance(info, dict):
+        return bool(info.get("stuck", False))
+    return False
+
+
+def _cap_consecutive_stuck(chain: List[Dict], max_keep: int = 3) -> List[Dict]:
+    kept: List[Dict] = []
+    stuck_run = 0
+
+    for tr in chain:
+        if _is_stuck_transition(tr):
+            stuck_run += 1
+            if stuck_run <= max_keep:
+                kept.append(tr)
+            # Skip excessive stuck frames until next non-stuck resets the run.
+            continue
+
+        stuck_run = 0
+        kept.append(tr)
+
+    return kept
+
+
+def load_transition_chains_from_logs(log_dirs: List[str]) -> List[List[Dict]]:
+    """Load filtered transition chains (episode-wise) from configured log dirs."""
+    chains_out: List[List[Dict]] = []
     for d in log_dirs:
         pkl_path = os.path.join(d, "collision_failures.pkl")
         if not os.path.exists(pkl_path):
@@ -74,11 +104,20 @@ def load_transitions_from_logs(log_dirs: List[str]) -> List[Dict]:
             obj = _load_pickle_file(pkl_path)
             chains = _extract_chains_from_obj(obj)
             for chain in chains:
-                for tr in chain:
-                    if isinstance(tr, dict) and "obs" in tr and "action" in tr:
-                        transitions.append(tr)
+                filtered_chain = _cap_consecutive_stuck(chain, max_keep=3)
+                if len(filtered_chain) > 0:
+                    chains_out.append(filtered_chain)
         except Exception:
             continue
+    return chains_out
+
+
+def load_transitions_from_logs(log_dirs: List[str]) -> List[Dict]:
+    transitions: List[Dict] = []
+    for chain in load_transition_chains_from_logs(log_dirs):
+        for tr in chain:
+            if isinstance(tr, dict) and "obs" in tr and "action" in tr:
+                transitions.append(tr)
     return transitions
 
 
@@ -170,4 +209,3 @@ def build_transition_arrays(transitions: List[Dict]):
         "dones": np.asarray(dones, dtype=np.bool_),
         "infos": infos,
     }
-

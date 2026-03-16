@@ -11,7 +11,7 @@ import yaml
 
 from deploy.deploy_mujoco_go2.train_offline.data_io import (
     get_log_dirs,
-    load_transitions_from_logs,
+    load_transition_chains_from_logs,
     stack_state_action,
 )
 
@@ -36,9 +36,13 @@ class FailureClassifier(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
+            # nn.Dropout(0.2),
             nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
+            # nn.Dropout(0.2),
             nn.Linear(hidden_dim, 1),
         )
 
@@ -50,7 +54,7 @@ def transition_label(tr: dict) -> float:
     info = tr.get("info", {})
     failure = bool(
         info.get("fallen", False)
-        or info.get("collided", False)
+        # or info.get("collided", False)
         or info.get("base_collision", False)
         or info.get("thigh_collision", False)
         or info.get("stuck", False)
@@ -164,6 +168,68 @@ def _eval_on_subset(model, criterion, x_t, y_t, indices):
     return float(loss.item()), float(acc)
 
 
+def _confusion_on_subset(model, x_t, y_t, indices):
+    if indices.size == 0:
+        return {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
+
+    with torch.no_grad():
+        logits = model(x_t[indices])
+        pred = (torch.sigmoid(logits) >= 0.5).float()
+        gt = y_t[indices]
+
+    tp = int(((pred == 1.0) & (gt == 1.0)).sum().item())
+    fp = int(((pred == 1.0) & (gt == 0.0)).sum().item())
+    tn = int(((pred == 0.0) & (gt == 0.0)).sum().item())
+    fn = int(((pred == 0.0) & (gt == 1.0)).sum().item())
+    return {"tp": tp, "fp": fp, "tn": tn, "fn": fn}
+
+
+def _save_confusion_csv(path: str, train_cm: dict, val_cm: dict, test_cm: dict):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["split", "TP", "FP", "TN", "FN"])
+        writer.writerow(["train", train_cm["tp"], train_cm["fp"], train_cm["tn"], train_cm["fn"]])
+        writer.writerow(["val", val_cm["tp"], val_cm["fp"], val_cm["tn"], val_cm["fn"]])
+        writer.writerow(["test", test_cm["tp"], test_cm["fp"], test_cm["tn"], test_cm["fn"]])
+
+
+def _expand_fail_labels_in_chain(chain: list, pre_k: int) -> np.ndarray:
+    """Mark failure frames and their preceding k frames as positive within a chain."""
+    n = len(chain)
+    labels = np.zeros((n,), dtype=np.float32)
+    if n == 0:
+        return labels
+
+    base_fail = np.asarray([transition_label(tr) for tr in chain], dtype=np.float32)
+    fail_indices = np.where(base_fail > 0.5)[0]
+    if fail_indices.size == 0:
+        return labels
+
+    labels[fail_indices] = 1.0
+    k = int(max(0, pre_k))
+    if k <= 0:
+        return labels
+
+    for idx in fail_indices:
+        start = max(0, int(idx) - k)
+        labels[start:int(idx) + 1] = 1.0
+    return labels
+
+
+def _flatten_chains_and_labels(chains: list, pre_k: int):
+    transitions = []
+    labels = []
+    for chain in chains:
+        if not isinstance(chain, list) or len(chain) == 0:
+            continue
+        chain_labels = _expand_fail_labels_in_chain(chain, pre_k)
+        for i, tr in enumerate(chain):
+            if isinstance(tr, dict) and "obs" in tr and "action" in tr:
+                transitions.append(tr)
+                labels.append(float(chain_labels[i]))
+    return transitions, np.asarray(labels, dtype=np.float32)
+
+
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     cfg_path = os.path.join(base_dir, "train_config.yaml")
@@ -178,13 +244,15 @@ def main():
 
     logs_cfg_path = os.path.join(base_dir, cfg.get("logs_config", "logs_config.yaml"))
     log_dirs, _ = get_log_dirs(logs_cfg_path)
-    transitions = load_transitions_from_logs(log_dirs)
+    chains = load_transition_chains_from_logs(log_dirs)
+
+    pre_k = int(cfg.get("classifier", {}).get("fail_preceding_k", 0))
+    transitions, labels = _flatten_chains_and_labels(chains, pre_k=pre_k)
 
     states, actions = stack_state_action(transitions)
     if states.shape[0] == 0:
         raise RuntimeError("No valid transitions loaded for classifier training.")
 
-    labels = np.asarray([transition_label(tr) for tr in transitions], dtype=np.float32)
     use_action_in_obs = bool(cfg.get("classifier", {}).get("concat_action_to_obs", True))
     if use_action_in_obs:
         x = np.concatenate([states, actions], axis=1).astype(np.float32)
@@ -293,6 +361,9 @@ def main():
             )
 
     test_loss, test_acc = _eval_on_subset(model, criterion, x_t, y_t, test_idx)
+    train_cm = _confusion_on_subset(model, x_t, y_t, train_idx)
+    val_cm = _confusion_on_subset(model, x_t, y_t, val_idx)
+    test_cm = _confusion_on_subset(model, x_t, y_t, test_idx)
 
     torch.save(
         {"epoch": epochs, "input_dim": input_dim, "model_state_dict": model.state_dict()},
@@ -300,6 +371,7 @@ def main():
     )
 
     _save_metrics_csv(os.path.join(log_dir, "metrics.csv"), (train_losses, val_losses), (train_accs, val_accs))
+    _save_confusion_csv(os.path.join(log_dir, "confusion_matrix.csv"), train_cm, val_cm, test_cm)
     _save_curve(train_losses, "Classifier Train Loss", os.path.join(log_dir, "loss.png"), smooth_window)
     _save_curve(val_accs, "Classifier Validation Accuracy", os.path.join(log_dir, "acc.png"), smooth_window)
 
@@ -313,10 +385,23 @@ def main():
                 "positive_rate": float(np.mean(labels)),
                 "input_dim": input_dim,
                 "concat_action_to_obs": bool(use_action_in_obs),
+                "fail_preceding_k": int(pre_k),
                 "val_split": float(val_split),
                 "test_split": float(test_split),
                 "test_loss": float(test_loss),
                 "test_accuracy": float(test_acc),
+                "train_TP": int(train_cm["tp"]),
+                "train_FP": int(train_cm["fp"]),
+                "train_TN": int(train_cm["tn"]),
+                "train_FN": int(train_cm["fn"]),
+                "val_TP": int(val_cm["tp"]),
+                "val_FP": int(val_cm["fp"]),
+                "val_TN": int(val_cm["tn"]),
+                "val_FN": int(val_cm["fn"]),
+                "test_TP": int(test_cm["tp"]),
+                "test_FP": int(test_cm["fp"]),
+                "test_TN": int(test_cm["tn"]),
+                "test_FN": int(test_cm["fn"]),
                 "epochs": epochs,
                 "device": str(device),
             },
