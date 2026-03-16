@@ -1,10 +1,11 @@
 import csv
 import os
-import pickle
 from typing import Dict, List, Tuple
 
 import numpy as np
 import yaml
+
+from deploy.deploy_mujoco_go2.offline_data_utils import load_chains_from_pkl_file
 
 
 def _resolve_path(base_dir: str, p: str) -> str:
@@ -32,68 +33,14 @@ def get_log_dirs(logs_config_path: str) -> Tuple[List[str], str]:
     return log_dirs, output_dir
 
 
-def _load_pickle_file(pkl_path: str):
-    with open(pkl_path, "rb") as f:
-        return pickle.load(f)
+def get_log_loading_options(logs_config_path: str) -> Dict:
+    cfg = load_logs_config(logs_config_path)
+    return {
+        "consecutive_fail_keep_k": int(cfg.get("consecutive_fail_keep_k", 0)),
+    }
 
 
-def _extract_chains_from_obj(obj) -> List[List[Dict]]:
-    chains: List[List[Dict]] = []
-
-    if isinstance(obj, dict):
-        if "chain" in obj and isinstance(obj["chain"], list):
-            chains.append(obj["chain"])
-        elif "chains" in obj and isinstance(obj["chains"], list):
-            for c in obj["chains"]:
-                if isinstance(c, list):
-                    chains.append(c)
-
-    elif isinstance(obj, list):
-        if len(obj) == 0:
-            return chains
-        # list of episodes dict
-        if isinstance(obj[0], dict) and "chain" in obj[0]:
-            for ep in obj:
-                c = ep.get("chain", [])
-                if isinstance(c, list):
-                    chains.append(c)
-        # list of transition dict
-        elif isinstance(obj[0], dict) and "obs" in obj[0] and "action" in obj[0]:
-            chains.append(obj)
-
-    return chains
-
-
-def _is_stuck_transition(tr: Dict) -> bool:
-    if not isinstance(tr, dict):
-        return False
-    if "stuck" in tr:
-        return bool(tr.get("stuck", False))
-    info = tr.get("info", {})
-    if isinstance(info, dict):
-        return bool(info.get("stuck", False))
-    return False
-
-
-def _cap_consecutive_stuck(chain: List[Dict], max_keep: int = 3) -> List[Dict]:
-    kept: List[Dict] = []
-    stuck_run = 0
-
-    for tr in chain:
-        if _is_stuck_transition(tr):
-            stuck_run += 1
-            if stuck_run <= max_keep:
-                kept.append(tr)
-            # Skip excessive stuck frames until next non-stuck resets the run.
-            continue
-
-        stuck_run = 0
-        kept.append(tr)
-
-    return kept
-
-
-def load_transition_chains_from_logs(log_dirs: List[str]) -> List[List[Dict]]:
+def load_transition_chains_from_logs(log_dirs: List[str], consecutive_fail_keep_k: int = 0) -> List[List[Dict]]:
     """Load filtered transition chains (episode-wise) from configured log dirs."""
     chains_out: List[List[Dict]] = []
     for d in log_dirs:
@@ -101,12 +48,11 @@ def load_transition_chains_from_logs(log_dirs: List[str]) -> List[List[Dict]]:
         if not os.path.exists(pkl_path):
             continue
         try:
-            obj = _load_pickle_file(pkl_path)
-            chains = _extract_chains_from_obj(obj)
-            for chain in chains:
-                filtered_chain = _cap_consecutive_stuck(chain, max_keep=3)
-                if len(filtered_chain) > 0:
-                    chains_out.append(filtered_chain)
+            chains = load_chains_from_pkl_file(
+                pkl_path,
+                consecutive_fail_keep_k=int(consecutive_fail_keep_k),
+            )
+            chains_out.extend(chains)
         except Exception:
             continue
     return chains_out

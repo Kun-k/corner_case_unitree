@@ -10,6 +10,7 @@ import torch.optim as optim
 import yaml
 
 from deploy.deploy_mujoco_go2.train_offline.data_io import (
+    get_log_loading_options,
     get_log_dirs,
     load_transition_chains_from_logs,
     stack_state_action,
@@ -244,7 +245,9 @@ def main():
 
     logs_cfg_path = os.path.join(base_dir, cfg.get("logs_config", "logs_config.yaml"))
     log_dirs, _ = get_log_dirs(logs_cfg_path)
-    chains = load_transition_chains_from_logs(log_dirs)
+    loading_opts = get_log_loading_options(logs_cfg_path)
+    fail_keep_k = int(loading_opts.get("consecutive_fail_keep_k", 0))
+    chains = load_transition_chains_from_logs(log_dirs, consecutive_fail_keep_k=fail_keep_k)
 
     pre_k = int(cfg.get("classifier", {}).get("fail_preceding_k", 0))
     transitions, labels = _flatten_chains_and_labels(chains, pre_k=pre_k)
@@ -386,6 +389,7 @@ def main():
                 "input_dim": input_dim,
                 "concat_action_to_obs": bool(use_action_in_obs),
                 "fail_preceding_k": int(pre_k),
+                "consecutive_fail_keep_k": int(fail_keep_k),
                 "val_split": float(val_split),
                 "test_split": float(test_split),
                 "test_loss": float(test_loss),

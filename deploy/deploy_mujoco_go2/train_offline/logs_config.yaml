@@ -18,3 +18,8 @@ log_dirs:
 # Optional output dir for aggregated stats
 output_dir: "./offline_states_logs/sac-0312-rew1-preload"
 
+# When consecutive fail+stuck frames appear, keep only the first K fail frames,
+# discard later fail+stuck frames until a non-stuck/fail frame appears.
+# 0 means do not trim.
+consecutive_fail_keep_k: 0
+

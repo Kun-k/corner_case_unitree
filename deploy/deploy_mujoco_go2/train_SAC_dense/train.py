@@ -1,6 +1,5 @@
 import os
 import pickle
-import glob
 
 import numpy as np
 import torch
@@ -11,6 +10,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecCheckNan
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
+from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file
 from deploy.deploy_mujoco_go2.train_SAC_dense.callbacks import DenseTrainingLogger
 from deploy.deploy_mujoco_go2.train_SAC_dense.dense_replay_buffer import FailureReplayBuffer
 
@@ -178,42 +178,8 @@ def configure_torch_runtime(cfg: dict):
         torch.set_num_threads(num_threads)
 
 
-def _extract_chains_from_obj(obj):
-    chains = []
-    if isinstance(obj, dict):
-        if "chain" in obj and isinstance(obj["chain"], list):
-            chains.append(obj["chain"])
-        elif "chains" in obj and isinstance(obj["chains"], list):
-            for c in obj["chains"]:
-                if isinstance(c, list):
-                    chains.append(c)
-    elif isinstance(obj, list):
-        if len(obj) == 0:
-            return chains
-        if isinstance(obj[0], dict) and "chain" in obj[0]:
-            for ep in obj:
-                c = ep.get("chain", [])
-                if isinstance(c, list):
-                    chains.append(c)
-        elif isinstance(obj[0], dict) and "obs" in obj[0] and "action" in obj[0]:
-            chains.append(obj)
-    return chains
-
-
-def _collect_pkl_files(paths):
-    files = []
-    for p in paths:
-        if not p:
-            continue
-        if os.path.isdir(p):
-            files.extend(glob.glob(os.path.join(p, "*.pkl")))
-        elif os.path.isfile(p) and p.lower().endswith(".pkl"):
-            files.append(p)
-    return sorted(list(set(files)))
-
-
-def preload_replay_buffer_from_pkl(model, pkl_paths, reward_cfg=None):
-    files = _collect_pkl_files(pkl_paths)
+def preload_replay_buffer_from_pkl(model, pkl_paths, reward_cfg=None, consecutive_fail_keep_k: int = 0):
+    files = collect_pkl_files(pkl_paths)
     inserted = 0
 
     obs_shape = model.observation_space.shape
@@ -221,9 +187,7 @@ def preload_replay_buffer_from_pkl(model, pkl_paths, reward_cfg=None):
 
     for fp in files:
         try:
-            with open(fp, "rb") as f:
-                obj = pickle.load(f)
-            chains = _extract_chains_from_obj(obj)
+            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=int(consecutive_fail_keep_k))
         except Exception:
             continue
 
@@ -251,7 +215,10 @@ def preload_replay_buffer_from_pkl(model, pkl_paths, reward_cfg=None):
                 except Exception:
                     continue
 
-    print(f"[train_SAC_dense] replay preload inserted transitions: {inserted}, reward_recompute={'on' if (reward_cfg or {}) else 'off'}")
+    print(
+        f"[train_SAC_dense] replay preload inserted transitions: {inserted}, "
+        f"reward_recompute={'on' if (reward_cfg or {}) else 'off'}, fail_keep_k={int(consecutive_fail_keep_k)}"
+    )
 
 
 def train_sac_dense(
@@ -281,6 +248,7 @@ def train_sac_dense(
     failure_pkl_name="train_failure_chains.pkl",
     failure_flush_every_episodes=50,
     reward_cfg=None,
+    consecutive_fail_keep_k: int = 0,
 ):
     preload_pkl_paths = preload_pkl_paths or []
 
@@ -330,7 +298,12 @@ def train_sac_dense(
         )
 
     if preload_pkl_paths:
-        preload_replay_buffer_from_pkl(model, preload_pkl_paths, reward_cfg=reward_cfg)
+        preload_replay_buffer_from_pkl(
+            model,
+            preload_pkl_paths,
+            reward_cfg=reward_cfg,
+            consecutive_fail_keep_k=int(consecutive_fail_keep_k),
+        )
 
     callback = DenseTrainingLogger(
         out_dir=log_dir,
@@ -396,6 +369,7 @@ def main():
         failure_pkl_name=train_config.get("failure_pkl_name", "train_failure_chains.pkl"),
         failure_flush_every_episodes=train_config.get("failure_flush_every_episodes", 50),
         reward_cfg=reward_cfg,
+        consecutive_fail_keep_k=int(train_config.get("consecutive_fail_keep_k", 0)),
     )
 
 

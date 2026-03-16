@@ -54,10 +54,15 @@ preload_pkl_paths: [
 
 learning_starts: 0
 
+# Offline data loading filter for replay preload:
+# keep only first K frames in each consecutive fail+stuck run, then wait until non-stuck/fail appears.
+# 0 means do not trim.
+consecutive_fail_keep_k: 1
+
 dense_sample_ratio: 0
 
 # Train-time failure recording
-failure_pkl_name: "train_failure_chains.pkl"
+failure_pkl_name: "collision_failures.pkl"
 failure_flush_every_episodes: 50
 
 #log_name: "sac_dense_0312-preload-ratio70"
