@@ -102,6 +102,7 @@ class TerrainTrainer:
         self.render = self.terrain_config["visualization"]["render"]
         self.lock_camera = self.terrain_config["visualization"]["lock_camera"]
         self.realtime_sim = self.terrain_config["visualization"]["realtime_sim"]
+        self.trace_enabled = bool(self.terrain_config.get("logging", {}).get("enable_trace", False))
         if self.render:
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
             self.viewer.cam.azimuth = 0
@@ -178,6 +179,24 @@ class TerrainTrainer:
 
         self.step_counter += 1
 
+        pre_qpos = None
+        pre_qvel = None
+        pre_robot_obs = None
+        robot_states = None
+        robot_actions = None
+        if self.trace_enabled:
+            # Full robot rollout trace in this terrain step:
+            # states: [s0, s1, ..., sN] ; actions: [a0, ..., a(N-1)]
+            robot_states = [
+                {
+                    'sim_i': -1,
+                    'qpos': np.asarray(self.data.qpos, dtype=np.float64).tolist(),
+                    'qvel': np.asarray(self.data.qvel, dtype=np.float64).tolist(),
+                    'robot_obs': np.asarray(self.go2_controller.get_observation(self.data), dtype=np.float32).tolist(),
+                }
+            ]
+            robot_actions = []
+
         # apply terrain action via TerrainChanger and remember it
         self.terrain_changer.apply_action_vector(terrain_action)
         self.terrain_changer._refresh_terrain()
@@ -190,6 +209,7 @@ class TerrainTrainer:
 
         # run robot controller with zero-order hold on tau
         target_dof_pos = self.go2_controller.default_angles.copy()
+        last_tau = np.zeros_like(self.data.ctrl)
         for sim_i in range(total_sim_steps):
             self.robot_counter += 1
             step_start = time.time()
@@ -197,8 +217,30 @@ class TerrainTrainer:
             if sim_i % int(self.control_decimation) == 0:
                 target_dof_pos = self.go2_controller.compute_action(self.data)
             tau = pd_control(target_dof_pos, self.data.qpos[7:], self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
+            last_tau = tau.copy()
+
+            if self.trace_enabled:
+                robot_actions.append(
+                    {
+                        'sim_i': int(sim_i),
+                        'target_dof_pos': np.asarray(target_dof_pos, dtype=np.float32).tolist(),
+                        'tau': np.asarray(tau, dtype=np.float32).tolist(),
+                        'policy_action_prev': np.asarray(self.go2_controller.action_policy_prev, dtype=np.float32).tolist(),
+                    }
+                )
+
             self.data.ctrl[:] = tau
             mujoco.mj_step(self.model, self.data)
+
+            if self.trace_enabled:
+                robot_states.append(
+                    {
+                        'sim_i': int(sim_i),
+                        'qpos': np.asarray(self.data.qpos, dtype=np.float64).tolist(),
+                        'qvel': np.asarray(self.data.qvel, dtype=np.float64).tolist(),
+                        'robot_obs': np.asarray(self.go2_controller.get_observation(self.data), dtype=np.float32).tolist(),
+                    }
+                )
 
             if self.render:
                 if self.lock_camera:
@@ -212,11 +254,28 @@ class TerrainTrainer:
 
         # compute terrain reward and next obs
         terrain_reward, terrain_info, done = self.compute_terrain_reward()
+
+        # Update last action before reading next observation so obs can include current terrain action.
+        self.terrain_changer.last_action = np.asarray(terrain_action, dtype=np.float32)
         next_terrain_obs = self.get_terrain_observation()
 
-        self.terrain_changer.last_action = np.asarray(terrain_action, dtype=np.float32)
-
-        info = {'terrain_reward': float(terrain_reward), **terrain_info}
+        info = {
+            'terrain_reward': float(terrain_reward),
+            'terrain_action': np.asarray(terrain_action, dtype=np.float32).tolist(),
+            'go2_target_dof_pos': np.asarray(target_dof_pos, dtype=np.float32).tolist(),
+            'go2_last_tau': np.asarray(last_tau, dtype=np.float32).tolist(),
+            'trace_enabled': bool(self.trace_enabled),
+            **terrain_info,
+        }
+        if self.trace_enabled:
+            info.update(
+                {
+                    'go2_rollout_trace': {
+                        'states': robot_states,
+                        'actions': robot_actions,
+                    }
+                }
+            )
         # done = False  # TODO 是否需要根据fall和collision判断
 
         # print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
