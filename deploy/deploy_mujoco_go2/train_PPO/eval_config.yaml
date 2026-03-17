@@ -1,5 +1,5 @@
-policy: "ppo_offline_replay_0313"  # random 表示随机策略，其余情况下读取 train_logs/<policy>/<checkpoint>
-checkpoint: "checkpoint_step_10000.zip"
+policy: "random"  # random 表示随机策略，其余情况下读取 train_logs/<policy>/<checkpoint>
+checkpoint: "model.zip"
 
 go2_task: "terrain"
 go2_config: "go2.yaml"
@@ -10,7 +10,7 @@ max_episode_steps: 35
 seed: 4
 
 log_name: "ppo_eval_default"
-use_curr_force: True
+use_curr_force: false
 
 render: True
 save_non_failure_trajectories: False

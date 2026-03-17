@@ -7,7 +7,7 @@ max_episode_steps: 35
 
 # Device / Torch runtime
 # auto | cpu | cuda | cuda:0
-device: "cuda:1"
+device: "cuda:3"
 seed: 0
 torch_deterministic: false
 cudnn_benchmark: true
@@ -33,6 +33,16 @@ checkpoint_every_steps: 200
 
 # Optional warm-start
 preload_model_path: ""   # e.g. deploy/deploy_mujoco_go2/train_PPO/train_logs/xxx/model.zip
+
+# Optional classifier gate for action source selection during training.
+# If enabled: classifier score > threshold => use PPO action, else random action.
+classifier_gate:
+  enabled: false
+  checkpoint_path: "../train_offline/classifier/classifier_0316/checkpoint_epoch_860.pt"
+  threshold: 0.55
+  concat_action_to_obs: false
+  hidden_dim: 128
+  device: "cuda:3"
 
 # Train-time failure recording
 failure_pkl_name: "collision_failures.pkl"

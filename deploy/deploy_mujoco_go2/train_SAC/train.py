@@ -18,6 +18,7 @@ except ImportError:
     import gym
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
+from deploy.deploy_mujoco_go2.classifier_gate import ClassifierGate
 from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file
 from deploy.deploy_mujoco_go2.reward_recompute_utils import (
     load_reward_cfg_from_yaml,
@@ -255,9 +256,7 @@ class TrainingLoggerCallback(BaseCallback):
         plt.close(fig)
 
 
-class StuckFilteredReplayBuffer(ReplayBuffer):
-    """ReplayBuffer that trims consecutive fail+stuck transitions during collection."""
-
+class FilteredGatedReplayBuffer(ReplayBuffer):
     def __init__(self, *args, consecutive_fail_keep_k: int = 0, **kwargs):
         super().__init__(*args, **kwargs)
         self.consecutive_fail_keep_k = int(max(0, consecutive_fail_keep_k))
@@ -265,32 +264,39 @@ class StuckFilteredReplayBuffer(ReplayBuffer):
 
     def add(self, obs, next_obs, action, reward, done, infos):
         if not isinstance(infos, (list, tuple)):
-            return super().add(obs, next_obs, action, reward, done, infos)
+            return
 
-        if self.consecutive_fail_keep_k <= 0:
-            return super().add(obs, next_obs, action, reward, done, infos)
+        # 如果使用classifier，则根据use_rl_action判断，否则一定为True
+        keep = np.asarray([
+            bool(info.get("use_rl_action", True)) if isinstance(info, dict) else True
+            for info in infos
+        ], dtype=np.bool_)
 
-        keep = np.ones((len(infos),), dtype=np.bool_)
-        for env_i, info in enumerate(infos):
-            if not isinstance(info, dict):
-                self._stuck_fail_run[env_i] = 0
-                continue
+        # if self.consecutive_fail_keep_k <= 0:
+        #     return super().add(obs, next_obs, action, reward, done, infos)
+        # keep = np.ones((len(infos),), dtype=np.bool_)
 
-            is_fail = bool(
-                info.get("fallen", False)
-                or info.get("collided", False)
-                or info.get("base_collision", False)
-                or info.get("thigh_collision", False)
-                or info.get("stuck", False)
-            )
-            is_stuck = bool(info.get("stuck", False))
+        if self.consecutive_fail_keep_k > 0:
+            for env_i, info in enumerate(infos):
+                if not isinstance(info, dict):
+                    self._stuck_fail_run[env_i] = 0
+                    continue
 
-            if is_fail and is_stuck:
-                self._stuck_fail_run[env_i] += 1
-                if self._stuck_fail_run[env_i] > self.consecutive_fail_keep_k:
-                    keep[env_i] = False
-            else:
-                self._stuck_fail_run[env_i] = 0
+                is_fail = bool(  # TODO 全局检查collided是否起作用
+                    info.get("fallen", False)
+                    or info.get("collided", False)
+                    or info.get("base_collision", False)
+                    or info.get("thigh_collision", False)
+                    or info.get("stuck", False)
+                )
+                is_stuck = bool(info.get("stuck", False))
+
+                if is_fail and is_stuck:
+                    self._stuck_fail_run[env_i] += 1
+                    if self._stuck_fail_run[env_i] > self.consecutive_fail_keep_k:
+                        keep[env_i] = False
+                else:
+                    self._stuck_fail_run[env_i] = 0
 
         if keep.size == 0 or not np.any(keep):
             return
@@ -303,6 +309,65 @@ class StuckFilteredReplayBuffer(ReplayBuffer):
             done[keep],
             [infos[i] for i in np.where(keep)[0]],
         )
+
+
+class GatedSAC(SAC):
+    """SAC variant that gates action source using a classifier score threshold.
+
+    - score > threshold: use SAC action
+    - else: use random action
+    Only SAC-selected transitions are written to replay buffer.
+    """
+
+    def __init__(self, *args, gate: ClassifierGate, gate_threshold: float = 0.5, min_rl_buffer_size_for_update: int = 1000, consecutive_fail_keep_k: int = 0, **kwargs):
+        kwargs.setdefault("replay_buffer_class", FilteredGatedReplayBuffer)
+        rb_kwargs = dict(kwargs.get("replay_buffer_kwargs", {}))
+        rb_kwargs.setdefault("consecutive_fail_keep_k", int(consecutive_fail_keep_k))
+        kwargs["replay_buffer_kwargs"] = rb_kwargs
+        kwargs["learning_starts"] = 0
+        super().__init__(*args, **kwargs)
+        self.gate = gate
+        self.gate_threshold = float(gate_threshold)
+        self.min_rl_buffer_size_for_update = int(max(1, min_rl_buffer_size_for_update))
+        self._last_use_rl_mask = None
+        self.rl_action_count = 0
+        self.random_action_count = 0
+
+    def _sample_action(self, learning_starts, action_noise=None, n_envs=1):
+        action, buffer_action = super()._sample_action(0, action_noise=action_noise, n_envs=n_envs)
+
+        probs = self.gate.predict_proba(self._last_obs, action)
+        use_rl_mask = probs > self.gate_threshold
+        self._last_use_rl_mask = np.asarray(use_rl_mask, dtype=np.bool_).reshape(-1)
+
+        if np.any(~self._last_use_rl_mask):
+            random_actions = np.stack([self.action_space.sample() for _ in range(int(np.sum(~self._last_use_rl_mask)))], axis=0).astype(np.float32)
+            action[~self._last_use_rl_mask] = random_actions
+            if isinstance(self.action_space, gym.spaces.Box):
+                buffer_action[~self._last_use_rl_mask] = self.policy.scale_action(random_actions)
+            else:
+                buffer_action[~self._last_use_rl_mask] = random_actions
+
+        self.rl_action_count += int(np.sum(self._last_use_rl_mask))
+        self.random_action_count += int(np.sum(~self._last_use_rl_mask))
+        return action, buffer_action
+
+    def _store_transition(self, replay_buffer, buffer_action, new_obs, reward, dones, infos):
+        if isinstance(infos, (list, tuple)):
+            mask = self._last_use_rl_mask
+            if mask is None or len(mask) != len(infos):
+                mask = np.ones((len(infos),), dtype=np.bool_)
+            infos = [dict(info) if isinstance(info, dict) else {} for info in infos]
+            for i in range(len(infos)):
+                infos[i]["use_rl_action"] = bool(mask[i])
+                infos[i]["gate_score"] = float(-1.0)
+        super()._store_transition(replay_buffer, buffer_action, new_obs, reward, dones, infos)
+
+    def train(self, gradient_steps: int, batch_size: int = 64):
+        upper_bound = self.replay_buffer.buffer_size if self.replay_buffer.full else self.replay_buffer.pos
+        if upper_bound < self.min_rl_buffer_size_for_update:
+            return
+        super().train(gradient_steps=gradient_steps, batch_size=batch_size)
 
 
 def configure_torch_runtime(cfg: dict):
@@ -389,7 +454,10 @@ def train_sac(go2_cfg, terrain_cfg,
               failure_pkl_name="train_failure_chains.pkl",
               failure_flush_every_episodes=50,
               reward_cfg=None,
-              consecutive_fail_keep_k: int = 0):
+              consecutive_fail_keep_k: int = 0,
+              classifier_gate=None,
+              classifier_threshold=0.5,
+              min_rl_buffer_size_for_update=1000):
 
     preload_pkl_paths = preload_pkl_paths or []
 
@@ -415,9 +483,12 @@ def train_sac(go2_cfg, terrain_cfg,
             "(e.g. ['bump'])."
         )
 
-    model = SAC(
-        "MlpPolicy",
-        vec_env,
+    gated_mode = classifier_gate is not None
+
+    model_cls = GatedSAC if gated_mode else SAC
+    model_kwargs = dict(
+        policy="MlpPolicy",
+        env=vec_env,
         verbose=1,
         device=device,
         learning_rate=float(learning_rate),
@@ -428,10 +499,18 @@ def train_sac(go2_cfg, terrain_cfg,
         gradient_steps=int(gradient_steps),
         tau=float(tau),
         gamma=float(gamma),
-        replay_buffer_class=StuckFilteredReplayBuffer,
-        replay_buffer_kwargs={"consecutive_fail_keep_k": int(consecutive_fail_keep_k)},
         seed=int(seed),
+        replay_buffer_class=FilteredGatedReplayBuffer,
+        replay_buffer_kwargs={"consecutive_fail_keep_k": int(consecutive_fail_keep_k)},
     )
+    if gated_mode:
+        model_kwargs.update(
+            gate=classifier_gate,
+            gate_threshold=float(classifier_threshold),
+            min_rl_buffer_size_for_update=int(min_rl_buffer_size_for_update),
+            consecutive_fail_keep_k=int(consecutive_fail_keep_k),
+        )
+    model = model_cls(**model_kwargs)
 
     if preload_model_path and os.path.exists(preload_model_path):
         print(f"[train_SAC] warm-loading pretrained weights from: {preload_model_path}")
@@ -454,6 +533,12 @@ def train_sac(go2_cfg, terrain_cfg,
 
     model.learn(total_timesteps=total_timesteps,
                 callback=callback)
+
+    if classifier_gate:
+        print(
+            f"[train_SAC] gated action stats: rl={model.rl_action_count}, random={model.random_action_count}, "
+            f"threshold={classifier_threshold}"
+        )
 
     model.save(os.path.join(log_dir, "model.zip"))
 
@@ -483,6 +568,21 @@ def main():
     for i in range(len(preload_pkl_paths)):
         preload_pkl_paths[i] = os.path.join(current_path, preload_pkl_paths[i])
 
+    classifier_gate = None
+    gate_cfg = train_config.get("classifier_gate", {})
+    if bool(gate_cfg.get("enabled", False)):
+        ckpt = str(gate_cfg.get("checkpoint_path", "")).strip()
+        if not ckpt:
+            raise ValueError("classifier_gate.enabled=true but checkpoint_path is empty")
+        if not os.path.isabs(ckpt):
+            ckpt = os.path.normpath(os.path.join(current_path, ckpt))
+        classifier_gate = ClassifierGate(
+            checkpoint_path=ckpt,
+            device=str(gate_cfg.get("device", train_config.get("device", "cpu"))),
+            hidden_dim=int(gate_cfg.get("hidden_dim", 1024)),
+            concat_action_to_obs=bool(gate_cfg.get("concat_action_to_obs", True)),
+        )
+
     train_sac(
         go2_cfg,
         terrain_cfg,
@@ -508,6 +608,9 @@ def main():
         failure_flush_every_episodes=train_config.get("failure_flush_every_episodes", 50),
         reward_cfg=reward_cfg,
         consecutive_fail_keep_k=int(train_config.get("consecutive_fail_keep_k", 0)),
+        classifier_gate=classifier_gate,
+        classifier_threshold=float(gate_cfg.get("threshold", 0.5)),
+        min_rl_buffer_size_for_update=int(gate_cfg.get("min_rl_buffer_size_for_update", train_config.get("learning_starts", 100))),
     )
 
 

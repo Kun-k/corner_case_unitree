@@ -25,8 +25,16 @@ use_curr_force: False  # 强制使用当前配置
 render: False
 save_non_failure_trajectories: True
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_21000.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_22000.out 2>&1 &
+classifier_gate:
+  enabled: false
+  checkpoint_path: "../train_offline/train_logs/offline_0312_hybrid_ppo/classifier/model_final.pt"
+  threshold: 0.55
+  concat_action_to_obs: true
+  hidden_dim: 1024
+  device: "cpu"
+
+#nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_21000.out 2>&1 &
+#nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_22000.out 2>&1 &
 
 # nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_go2-2_15cm_1.out 2>&1 &
 # nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_sac_eval.out 2>&1 &

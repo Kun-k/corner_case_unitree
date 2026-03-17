@@ -1,19 +1,11 @@
 # 脚本顶部添加
-import os, sys
-
-# 获取脚本所在目录
-script_dir = os.path.dirname(os.path.abspath(__file__))
-# 回溯到项目根目录（根据你的目录结构，../.. 表示向上2级，../../.. 向上3级）
-root_dir = os.path.abspath(os.path.join(script_dir, '../../..'))
-# 添加到 sys.path
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)  # 插入到最前面，优先查找
-
+import os
 import csv
 import pickle
 import numpy as np
 from stable_baselines3 import SAC
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
+from deploy.deploy_mujoco_go2.classifier_gate import ClassifierGate
 import yaml
 
 
@@ -56,6 +48,8 @@ def evaluate_policy(
     log_dir,
     seed,
     render,
+    classifier_gate=None,
+    classifier_threshold=0.5,
     save_non_failure_trajectories=False,
 ):
 
@@ -68,10 +62,7 @@ def evaluate_policy(
 
     env = TerrainGymEnv(trainer, max_episode_steps=max_episode_steps)
 
-    if model is None:
-        rng = np.random.default_rng(seed)
-    else:
-        rng = None
+    rng = np.random.default_rng(seed)
 
     paths = _build_log_paths(log_dir)
 
@@ -112,7 +103,16 @@ def evaluate_policy(
             if model is None:
                 action = rng.uniform(-1.0, 1.0, size=env.action_space.shape).astype(np.float32)
             else:
-                action, _ = model.predict(obs, deterministic=False)
+                rl_action, _ = model.predict(obs, deterministic=False)
+                rl_action = np.asarray(rl_action, dtype=np.float32)
+                if classifier_gate is None:
+                    action = rl_action
+                else:
+                    score = float(classifier_gate.predict_proba(np.asarray(obs, dtype=np.float32), rl_action)[0])
+                    if score > float(classifier_threshold):
+                        action = rl_action
+                    else:
+                        action = rng.uniform(-1.0, 1.0, size=env.action_space.shape).astype(np.float32)
             next_obs, reward, terminated, truncated, info = env.step(action)
 
             # info_dict = {
@@ -219,6 +219,21 @@ def main():
         seed = 0
 
     render = eval_config["render"]
+    classifier_gate = None
+    gate_cfg = eval_config.get("classifier_gate", {})
+    if bool(gate_cfg.get("enabled", False)):
+        ckpt = str(gate_cfg.get("checkpoint_path", "")).strip()
+        if not ckpt:
+            raise ValueError("classifier_gate.enabled=true but checkpoint_path is empty")
+        if not os.path.isabs(ckpt):
+            ckpt = os.path.normpath(os.path.join(current_path, ckpt))
+        classifier_gate = ClassifierGate(
+            checkpoint_path=ckpt,
+            device=str(gate_cfg.get("device", "cpu")),
+            hidden_dim=int(gate_cfg.get("hidden_dim", 1024)),
+            concat_action_to_obs=bool(gate_cfg.get("concat_action_to_obs", True)),
+        )
+
     save_non_failure_trajectories = bool(eval_config.get("save_non_failure_trajectories", False))
 
     evaluate_policy(
@@ -230,6 +245,8 @@ def main():
         log_dir=log_dir,
         seed=seed,
         render=render,
+        classifier_gate=classifier_gate,
+        classifier_threshold=float(gate_cfg.get("threshold", 0.5)),
         save_non_failure_trajectories=save_non_failure_trajectories,
     )
 

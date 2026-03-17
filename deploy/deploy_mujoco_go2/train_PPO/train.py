@@ -21,6 +21,7 @@ except ImportError:
     from gym import spaces
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
+from deploy.deploy_mujoco_go2.classifier_gate import ClassifierGate
 from deploy.deploy_mujoco_go2.offline_data_utils import _cap_consecutive_failures
 
 
@@ -225,13 +226,17 @@ class TrainingLoggerCallback(BaseCallback):
         plt.close(fig)
 
 
-class FilteredPPO(PPO):
-    """PPO variant that filters consecutive fail+stuck transitions before rollout insertion."""
-
-    def __init__(self, *args, consecutive_fail_keep_k: int = 0, **kwargs):
+class FilteredGatedPPO(PPO):
+    def __init__(self, *args, gate: ClassifierGate, gate_threshold: float = 0.5, consecutive_fail_keep_k: int = 0, **kwargs):
         super().__init__(*args, **kwargs)
         self.consecutive_fail_keep_k = int(max(0, consecutive_fail_keep_k))
         self._stuck_fail_run = None
+
+        # used only for gate
+        self.gate = gate
+        self.gate_threshold = float(gate_threshold)
+        self.rl_action_count = 0
+        self.random_action_count = 0
 
     def _get_keep_mask(self, infos):
         n_envs = len(infos)
@@ -279,8 +284,10 @@ class FilteredPPO(PPO):
         while n_steps < n_rollout_steps:
             env_steps += 1
             if env_steps > n_rollout_steps * 200:
-                raise RuntimeError("FilteredPPO could not collect enough transitions. Try lowering consecutive_fail_keep_k.")
-
+                raise RuntimeError(
+                    "FilteredGatedPPO could not collect enough RL transitions. "
+                    "Try lowering classifier_gate.threshold or lowering consecutive_fail_keep_k."
+                )
             if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
                 self.policy.reset_noise(env.num_envs)
 
@@ -295,6 +302,13 @@ class FilteredPPO(PPO):
                     clipped_actions = self.policy.unscale_action(clipped_actions)
                 else:
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
+
+            if self.gate:
+                scores = self.gate.predict_proba(self._last_obs, clipped_actions)
+                use_rl_mask = np.asarray(scores > self.gate_threshold, dtype=np.bool_).reshape(-1)
+                if np.any(~use_rl_mask):
+                    random_actions = np.stack([self.action_space.sample() for _ in range(int(np.sum(~use_rl_mask)))], axis=0).astype(np.float32)
+                    clipped_actions[~use_rl_mask] = random_actions
 
             new_obs, rewards, dones, infos = env.step(clipped_actions)
             self.num_timesteps += env.num_envs
@@ -320,6 +334,9 @@ class FilteredPPO(PPO):
                 actions = actions.reshape(-1, 1)
 
             keep = self._get_keep_mask(infos)
+            if self.gate:
+                keep = keep & use_rl_mask
+
             if np.any(keep):
                 rollout_buffer.add(
                     self._last_obs[keep],
@@ -330,6 +347,10 @@ class FilteredPPO(PPO):
                     log_probs[keep],
                 )
                 n_steps += int(np.sum(keep))
+
+            if self.gate:
+                self.rl_action_count += int(np.sum(use_rl_mask))
+                self.random_action_count += int(np.sum(~use_rl_mask))
 
             self._last_obs = new_obs
             self._last_episode_starts = dones
@@ -362,7 +383,7 @@ def configure_torch_runtime(cfg: dict):
         torch.set_num_threads(num_threads)
 
 
-def train_ppo(go2_cfg, terrain_cfg, total_timesteps=20000, max_episode_steps=35, log_dir="train_terrain_logs", device="auto", learning_rate=3e-4, batch_size=256, n_steps=2048, n_epochs=10, gamma=0.99, gae_lambda=0.95, clip_range=0.2, ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5, seed=0, plot_save_every_steps=2000, plot_smooth_window=20, checkpoint_every_steps=10000, preload_model_path="", failure_pkl_name="train_failure_chains.pkl", failure_flush_every_episodes=50, consecutive_fail_keep_k: int = 0):
+def train_ppo(go2_cfg, terrain_cfg, total_timesteps=20000, max_episode_steps=35, log_dir="train_terrain_logs", device="auto", learning_rate=3e-4, batch_size=256, n_steps=2048, n_epochs=10, gamma=0.99, gae_lambda=0.95, clip_range=0.2, ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5, seed=0, plot_save_every_steps=2000, plot_smooth_window=20, checkpoint_every_steps=10000, preload_model_path="", failure_pkl_name="train_failure_chains.pkl", failure_flush_every_episodes=50, classifier_gate=None, classifier_threshold=0.5, consecutive_fail_keep_k: int = 0):
 
     def make_env():
         trainer = TerrainTrainer(go2_cfg, terrain_cfg)
@@ -387,7 +408,7 @@ def train_ppo(go2_cfg, terrain_cfg, total_timesteps=20000, max_episode_steps=35,
             "(e.g. ['bump'])."
         )
 
-    model = FilteredPPO(
+    model = FilteredGatedPPO(
         "MlpPolicy",
         vec_env,
         verbose=1,
@@ -402,6 +423,8 @@ def train_ppo(go2_cfg, terrain_cfg, total_timesteps=20000, max_episode_steps=35,
         ent_coef=float(ent_coef),
         vf_coef=float(vf_coef),
         max_grad_norm=float(max_grad_norm),
+        gate=classifier_gate,
+        gate_threshold=float(classifier_threshold),
         consecutive_fail_keep_k=int(consecutive_fail_keep_k),
         seed=int(seed),
     )
@@ -418,6 +441,11 @@ def train_ppo(go2_cfg, terrain_cfg, total_timesteps=20000, max_episode_steps=35,
     )
 
     model.learn(total_timesteps=total_timesteps, callback=callback)
+    if classifier_gate:
+        print(
+            f"[train_PPO] gated action stats: rl={model.rl_action_count}, random={model.random_action_count}, "
+            f"threshold={classifier_threshold}"
+        )
     model.save(os.path.join(log_dir, "model.zip"))
 
 
@@ -440,6 +468,21 @@ def main():
 
     go2_cfg = [train_config["go2_task"], train_config["go2_config"]]
     terrain_cfg = f"train_PPO/{train_config['terrain_config']}"
+
+    classifier_gate = None
+    gate_cfg = train_config.get("classifier_gate", {})
+    if bool(gate_cfg.get("enabled", False)):
+        ckpt = str(gate_cfg.get("checkpoint_path", "")).strip()
+        if not ckpt:
+            raise ValueError("classifier_gate.enabled=true but checkpoint_path is empty")
+        if not os.path.isabs(ckpt):
+            ckpt = os.path.normpath(os.path.join(current_path, ckpt))
+        classifier_gate = ClassifierGate(
+            checkpoint_path=ckpt,
+            device=str(gate_cfg.get("device", train_config.get("device", "cpu"))),
+            hidden_dim=int(gate_cfg.get("hidden_dim", 1024)),
+            concat_action_to_obs=bool(gate_cfg.get("concat_action_to_obs", True)),
+        )
 
     train_ppo(
         go2_cfg=go2_cfg,
@@ -465,6 +508,8 @@ def main():
         preload_model_path=train_config.get("preload_model_path", ""),
         failure_pkl_name=train_config.get("failure_pkl_name", "train_failure_chains.pkl"),
         failure_flush_every_episodes=train_config.get("failure_flush_every_episodes", 50),
+        classifier_gate=classifier_gate,
+        classifier_threshold=float(gate_cfg.get("threshold", 0.5)),
         consecutive_fail_keep_k=int(train_config.get("consecutive_fail_keep_k", 0)),
     )
 
