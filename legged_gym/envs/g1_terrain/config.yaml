@@ -2,8 +2,8 @@ terrain:
   terrain_choice: 7
 
 commands:
-  fixed_target_lin_vel: false
-  target_lin_vel: [0.8, 0.0]
-  fixed_target_heading: false
+  fixed_target_lin_vel: False
+  target_lin_vel: [1.0, 0.0]
+  fixed_target_heading: False
   target_heading_deg: 0.0
 

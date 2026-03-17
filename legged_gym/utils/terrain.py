@@ -47,6 +47,44 @@ class Terrain:
                                                                                          self.cfg.vertical_scale,
                                                                                          self.cfg.slope_treshold)
 
+    def flatten_world_points_to_height(self, points_xy, target_height: float = 0.0, radius_m: float = 0.25):
+        """Flatten local patches around world XY points to a fixed height.
+
+        Args:
+            points_xy: Iterable of [x, y] in world coordinates.
+            target_height: Desired terrain height in meters.
+            radius_m: Flatten radius around each point in meters.
+        """
+        if self.type in ["none", "plane"]:
+            return
+
+        pts = np.asarray(points_xy, dtype=np.float32)
+        if pts.size == 0:
+            return
+        pts = pts.reshape(-1, 2)
+
+        target_h_i16 = int(np.round(float(target_height) / self.cfg.vertical_scale))
+        r_px = max(1, int(np.round(float(radius_m) / self.cfg.horizontal_scale)))
+
+        for x_m, y_m in pts:
+            cx = int(np.round(float(x_m) / self.cfg.horizontal_scale)) + self.border
+            cy = int(np.round(float(y_m) / self.cfg.horizontal_scale)) + self.border
+
+            x0 = max(0, cx - r_px)
+            x1 = min(self.tot_rows, cx + r_px)
+            y0 = max(0, cy - r_px)
+            y1 = min(self.tot_cols, cy + r_px)
+            self.height_field_raw[x0:x1, y0:y1] = target_h_i16
+
+        self.heightsamples = self.height_field_raw
+        if self.type == "trimesh":
+            self.vertices, self.triangles = terrain_utils.convert_heightfield_to_trimesh(
+                self.height_field_raw,
+                self.cfg.horizontal_scale,
+                self.cfg.vertical_scale,
+                self.cfg.slope_treshold,
+            )
+
     def randomized_terrain(self):
         for k in range(self.cfg.num_sub_terrains):
             # Env coordinates in the world
@@ -190,8 +228,6 @@ class Terrain:
             # print("choice:  gap terrain")
             gap_terrain(terrain, gap_size=gap_size, platform_size=3.)
         elif choice == 7:
-            # print("choice:  random uniform terrain")
-            # terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.)  # 生成更陡峭的uniform
             terrain_utils.random_uniform_terrain(terrain, min_height=-0.20, max_height=0.20, step=0.005,
                                                  downsampled_scale=0.2)  # -0.05, 0.05, 0.005, 0.2
         elif choice == 10:  # TODO 这里生成对抗测试的地形

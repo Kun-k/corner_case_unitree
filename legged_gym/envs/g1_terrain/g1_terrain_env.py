@@ -32,6 +32,41 @@ class G1TerrainRobot(G1Robot):
         self.runtime_cfg = self._load_runtime_cfg()
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
 
+    def _plan_spawn_positions(self):
+        """Pre-sample per-env spawn positions with zero initial XY noise."""
+        max_init_level = self.cfg.terrain.num_rows - 1
+        self.terrain_levels = torch.randint(0, max_init_level + 1, (self.num_envs,), device=self.device)
+        # Evenly map env ids to terrain type columns.
+        self.terrain_types = torch.div(
+            torch.arange(self.num_envs, device=self.device) * self.cfg.terrain.num_cols,
+            self.num_envs,
+            rounding_mode='floor',
+        ).to(torch.long)
+        self.max_terrain_level = self.cfg.terrain.num_rows
+
+        terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
+        self._planned_env_origins = terrain_origins[self.terrain_levels, self.terrain_types]
+
+        spawn_noise_xy = torch.zeros((self.num_envs, 2), device=self.device)
+        self._planned_spawn_xy = self._planned_env_origins[:, :2] + spawn_noise_xy
+
+    def _get_env_origins(self):
+        """Use planned terrain origins for mesh terrains, grid fallback otherwise."""
+        if self.cfg.terrain.mesh_type in ["heightfield", "trimesh"] and hasattr(self, "_planned_env_origins"):
+            self.custom_origins = True
+            self.env_origins = self._planned_env_origins.clone()
+            self.env_origins[:, 2] = 0.
+        else:
+            self.custom_origins = False
+            self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
+            num_cols = np.floor(np.sqrt(self.num_envs))
+            num_rows = np.ceil(self.num_envs / num_cols)
+            xx, yy = torch.meshgrid(torch.arange(num_rows), torch.arange(num_cols))
+            spacing = self.cfg.env.env_spacing
+            self.env_origins[:, 0] = spacing * xx.flatten()[:self.num_envs]
+            self.env_origins[:, 1] = spacing * yy.flatten()[:self.num_envs]
+            self.env_origins[:, 2] = 0.
+
     def create_sim(self):
         """Create sim with terrain choice controlled by runtime config."""
         self.up_axis_idx = 2
@@ -46,6 +81,13 @@ class G1TerrainRobot(G1Robot):
         if mesh_type in ['heightfield', 'trimesh']:
             terrain_choice = int(self.runtime_cfg["terrain"]["terrain_choice"])
             self.terrain = Terrain(self.cfg.terrain, self.num_envs, choice=terrain_choice)
+            self._plan_spawn_positions()
+            # Flatten exactly under generated initial robot XY positions.
+            self.terrain.flatten_world_points_to_height(
+                self._planned_spawn_xy.detach().cpu().numpy(),
+                target_height=0.0,
+                radius_m=0.5,
+            )
         if mesh_type == "ground_plane":
             self._create_ground_plane()
         elif mesh_type == "heightfield":
@@ -54,6 +96,130 @@ class G1TerrainRobot(G1Robot):
             self._create_trimesh()
 
         self._create_envs()
+
+    def _create_envs(self):
+        """Create envs and use the pre-planned initial spawn positions on mesh terrains."""
+        asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
+        asset_root = os.path.dirname(asset_path)
+        asset_file = os.path.basename(asset_path)
+
+        asset_options = gymapi.AssetOptions()
+        asset_options.default_dof_drive_mode = self.cfg.asset.default_dof_drive_mode
+        asset_options.collapse_fixed_joints = self.cfg.asset.collapse_fixed_joints
+        asset_options.replace_cylinder_with_capsule = self.cfg.asset.replace_cylinder_with_capsule
+        asset_options.flip_visual_attachments = self.cfg.asset.flip_visual_attachments
+        asset_options.fix_base_link = self.cfg.asset.fix_base_link
+        asset_options.density = self.cfg.asset.density
+        asset_options.angular_damping = self.cfg.asset.angular_damping
+        asset_options.linear_damping = self.cfg.asset.linear_damping
+        asset_options.max_angular_velocity = self.cfg.asset.max_angular_velocity
+        asset_options.max_linear_velocity = self.cfg.asset.max_linear_velocity
+        asset_options.armature = self.cfg.asset.armature
+        asset_options.thickness = self.cfg.asset.thickness
+        asset_options.disable_gravity = self.cfg.asset.disable_gravity
+
+        robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+        self.num_dof = self.gym.get_asset_dof_count(robot_asset)
+        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
+        dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
+        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
+
+        body_names = self.gym.get_asset_rigid_body_names(robot_asset)
+        self.dof_names = self.gym.get_asset_dof_names(robot_asset)
+        self.num_bodies = len(body_names)
+        self.num_dofs = len(self.dof_names)
+        feet_names = [s for s in body_names if self.cfg.asset.foot_name in s]
+        penalized_contact_names = []
+        for name in self.cfg.asset.penalize_contacts_on:
+            penalized_contact_names.extend([s for s in body_names if name in s])
+        termination_contact_names = []
+        for name in self.cfg.asset.terminate_after_contacts_on:
+            termination_contact_names.extend([s for s in body_names if name in s])
+
+        base_init_state_list = self.cfg.init_state.pos + self.cfg.init_state.rot + self.cfg.init_state.lin_vel + self.cfg.init_state.ang_vel
+        self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)
+        start_pose = gymapi.Transform()
+        start_pose.p = gymapi.Vec3(*self.base_init_state[:3])
+
+        self._get_env_origins()
+        env_lower = gymapi.Vec3(0., 0., 0.)
+        env_upper = gymapi.Vec3(0., 0., 0.)
+        self.actor_handles = []
+        self.envs = []
+        for i in range(self.num_envs):
+            env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
+            pos = self.env_origins[i].clone()
+            if self.custom_origins and hasattr(self, "_planned_spawn_xy"):
+                pos[:2] = self._planned_spawn_xy[i]
+            else:
+                pos[:2] = self.env_origins[i, :2]
+            pos[:2] += 0 * torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)
+            start_pose.p = gymapi.Vec3(*pos)
+
+            rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
+            self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props)
+            actor_handle = self.gym.create_actor(env_handle, robot_asset, start_pose, self.cfg.asset.name, i, self.cfg.asset.self_collisions, 0)
+            dof_props = self._process_dof_props(dof_props_asset, i)
+            self.gym.set_actor_dof_properties(env_handle, actor_handle, dof_props)
+            body_props = self.gym.get_actor_rigid_body_properties(env_handle, actor_handle)
+            body_props = self._process_rigid_body_props(body_props, i)
+            self.gym.set_actor_rigid_body_properties(env_handle, actor_handle, body_props, recomputeInertia=True)
+            self.envs.append(env_handle)
+            self.actor_handles.append(actor_handle)
+
+        self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(feet_names)):
+            self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], feet_names[i])
+
+        self.penalised_contact_indices = torch.zeros(len(penalized_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(penalized_contact_names)):
+            self.penalised_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], penalized_contact_names[i])
+
+        self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(termination_contact_names)):
+            self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
+
+    # def _get_env_origins(self):
+    #     """Use terrain origins for heightfield/trimesh; fallback to regular grid otherwise."""
+    #     if self.cfg.terrain.mesh_type in ["heightfield", "trimesh"]:
+    #         self.custom_origins = True
+    #         self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
+    #         max_init_level = self.cfg.terrain.num_rows - 1
+    #         self.terrain_levels = torch.randint(0, max_init_level + 1, (self.num_envs,), device=self.device)
+    #         self.terrain_types = torch.div(
+    #             torch.arange(self.num_envs, device=self.device),
+    #             (self.num_envs / self.cfg.terrain.num_cols),
+    #             rounding_mode='floor'
+    #         ).to(torch.long)
+    #         self.max_terrain_level = self.cfg.terrain.num_rows
+    #         self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
+    #         self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
+    #     else:
+    #         self.custom_origins = False
+    #         self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
+    #         num_cols = np.floor(np.sqrt(self.num_envs))
+    #         num_rows = np.ceil(self.num_envs / num_cols)
+    #         xx, yy = torch.meshgrid(torch.arange(num_rows), torch.arange(num_cols))
+    #         spacing = self.cfg.env.env_spacing
+    #         self.env_origins[:, 0] = spacing * xx.flatten()[:self.num_envs]
+    #         self.env_origins[:, 1] = spacing * yy.flatten()[:self.num_envs]
+    #         self.env_origins[:, 2] = 0.
+
+    def _reset_root_states(self, env_ids):
+        """ Resets ROOT states position and velocities of selected environmments
+            Sets base position based on the curriculum
+            Selects randomized base velocities within -0.5:0.5 [m/s, rad/s]
+        Args:
+            env_ids (List[int]): Environemnt ids
+        """
+        self.root_states[env_ids] = self.base_init_state
+        self.root_states[env_ids, :3] += self.env_origins[env_ids]
+        # base velocities
+        self.root_states[env_ids, 7:13] = torch_rand_float(-0.5, 0.5, (len(env_ids), 6), device=self.device) # [7:10]: lin vel, [10:13]: ang vel
+        env_ids_int32 = env_ids.to(dtype=torch.int32)
+        self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                     gymtorch.unwrap_tensor(self.root_states),
+                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
 
     def _resample_commands(self, env_ids):
         """Runtime-configurable command sampler (fixed or random)."""

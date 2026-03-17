@@ -3,7 +3,7 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class G1TerrainCfg(G1RoughCfg):
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.9] # x,y,z [m]
+        pos = [0.0, 0.0, 0.8] # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
            'left_hip_yaw_joint' : 0. ,
            'left_hip_roll_joint' : 0,
@@ -25,8 +25,8 @@ class G1TerrainCfg(G1RoughCfg):
         # num_rows = 1
         # num_cols = 1
         border_size = 25
-        terrain_length = 4.0
-        terrain_width = 4.0
+        terrain_length = 8.0
+        terrain_width = 8.0
         curriculum = True
         horizontal_scale = 0.1
         slope_treshold = 1.5
