@@ -254,7 +254,7 @@ class FilteredGatedPPO(PPO):
 
             is_fail = bool(
                 info.get("fallen", False)
-                or info.get("collided", False)
+                # or info.get("collided", False)
                 or info.get("base_collision", False)
                 or info.get("thigh_collision", False)
                 or info.get("stuck", False)

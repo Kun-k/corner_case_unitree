@@ -282,9 +282,9 @@ class FilteredGatedReplayBuffer(ReplayBuffer):
                     self._stuck_fail_run[env_i] = 0
                     continue
 
-                is_fail = bool(  # TODO 全局检查collided是否起作用
+                is_fail = bool(
                     info.get("fallen", False)
-                    or info.get("collided", False)
+                    # or info.get("collided", False)
                     or info.get("base_collision", False)
                     or info.get("thigh_collision", False)
                     or info.get("stuck", False)

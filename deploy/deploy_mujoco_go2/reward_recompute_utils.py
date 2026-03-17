@@ -36,6 +36,7 @@ def recompute_fail_flags_from_info(info: Dict, reward_cfg: Dict) -> Dict:
     info = info or {}
     reward_cfg = reward_cfg or {}
 
+    # TODO 这里强行将collided设置False了
     fallen = bool(info.get("fallen", False)) and _reward_item_enabled(reward_cfg, "fall_reward")
     collided = bool(info.get("collided", False)) and _reward_item_enabled(reward_cfg, "collision_reward")
     base_collision = bool(info.get("base_collision", False)) and _reward_item_enabled(reward_cfg, "base_collision_reward")
