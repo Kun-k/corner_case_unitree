@@ -14,9 +14,9 @@ terrain_config: "terrain_config.yaml"
 episodes: 4000
 
 max_episode_steps: 35
-seed: 1
+seed: 4
 
-log_name: "nohup_random_eval_go2-2_1"
+log_name: "nohup_random_eval_go2-2_15cm_4"
 #log_name: "random_eval_0311-4"
 #log_name: "sac_eval_0313-2"
 
@@ -28,5 +28,5 @@ save_non_failure_trajectories: True
 # nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_21000.out 2>&1 &
 # nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_22000.out 2>&1 &
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_go2-2_1.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_go2-2_15cm_1.out 2>&1 &
 # nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_sac_eval.out 2>&1 &

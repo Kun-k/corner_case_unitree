@@ -15,7 +15,7 @@ terrain_action:
   radius_max: 0.5
 
   # bump 最大高度（米）
-  max_bump_height: 0.1
+  max_bump_height: 0.15
 
   # 机器人附近地形不修改半径（米）
   no_change_radius: 0.4

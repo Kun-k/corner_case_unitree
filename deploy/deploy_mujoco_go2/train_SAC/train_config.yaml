@@ -7,7 +7,7 @@ max_episode_steps: 35
 
 # Device / Torch runtime
 # auto | cpu | cuda | cuda:0
-device: "cuda:2"
+device: "cuda:0"
 seed: 0
 torch_deterministic: false
 cudnn_benchmark: true
@@ -35,14 +35,14 @@ checkpoint_every_steps: 200
 # Optional warm-starts
 preload_model_path: ""
 preload_pkl_paths: [
-  "../train_SAC/eval_logs/random_eval_0311-1",
-  "../train_SAC/eval_logs/random_eval_0311-2",
-  "../train_SAC/eval_logs/random_eval_0311-3",
-  "../train_SAC/eval_logs/random_eval_0311-4",
-  "../train_SAC/eval_logs/random_eval_0311-5",
-  "../train_SAC/eval_logs/random_eval_0311-6",
-  "../train_SAC/eval_logs/random_eval_0311-7",
-  "../train_SAC/eval_logs/random_eval_0311-8",
+#  "../train_SAC/eval_logs/random_eval_0311-1",
+#  "../train_SAC/eval_logs/random_eval_0311-2",
+#  "../train_SAC/eval_logs/random_eval_0311-3",
+#  "../train_SAC/eval_logs/random_eval_0311-4",
+#  "../train_SAC/eval_logs/random_eval_0311-5",
+#  "../train_SAC/eval_logs/random_eval_0311-6",
+#  "../train_SAC/eval_logs/random_eval_0311-7",
+#  "../train_SAC/eval_logs/random_eval_0311-8",
 ]
 
 learning_starts: 100
@@ -56,6 +56,6 @@ consecutive_fail_keep_k: 1
 failure_pkl_name: "collision_failures.pkl"
 failure_flush_every_episodes: 50
 
-log_name: "sac_0312-rew1-preload"
+log_name: "gogogo0316"
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_0312-rew1-preload.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac.out 2>&1 &

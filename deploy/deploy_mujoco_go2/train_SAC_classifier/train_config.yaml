@@ -35,14 +35,14 @@ checkpoint_every_steps: 200
 # Optional warm-starts
 preload_model_path: ""
 preload_pkl_paths: [
-  "../train_SAC/eval_logs/random_eval_0311-1",
-  "../train_SAC/eval_logs/random_eval_0311-2",
-  "../train_SAC/eval_logs/random_eval_0311-3",
-  "../train_SAC/eval_logs/random_eval_0311-4",
-  "../train_SAC/eval_logs/random_eval_0311-5",
-  "../train_SAC/eval_logs/random_eval_0311-6",
-  "../train_SAC/eval_logs/random_eval_0311-7",
-  "../train_SAC/eval_logs/random_eval_0311-8",
+#  "../train_SAC/eval_logs/random_eval_0311-1",
+#  "../train_SAC/eval_logs/random_eval_0311-2",
+#  "../train_SAC/eval_logs/random_eval_0311-3",
+#  "../train_SAC/eval_logs/random_eval_0311-4",
+#  "../train_SAC/eval_logs/random_eval_0311-5",
+#  "../train_SAC/eval_logs/random_eval_0311-6",
+#  "../train_SAC/eval_logs/random_eval_0311-7",
+#  "../train_SAC/eval_logs/random_eval_0311-8",
 ]
 
 learning_starts: 100
@@ -57,17 +57,17 @@ consecutive_fail_keep_k: 1
 # Only SAC-selected transitions are inserted into replay buffer.
 classifier_gate:
   enabled: false
-  checkpoint_path: "../train_offline/train_logs/offline_0312_hybrid_ppo/classifier/model_final.pt"
+  checkpoint_path: "../train_offline/classifier/classifier_0316/checkpoint_epoch_860.pt"
   threshold: 0.55
   concat_action_to_obs: true
-  hidden_dim: 1024
-  device: "auto"
+  hidden_dim: 128
+  device: "cuda:2"
   min_rl_buffer_size_for_update: 100
 
 # Train-time failure recording
 failure_pkl_name: "collision_failures.pkl"
 failure_flush_every_episodes: 50
 
-log_name: "sac_0312-rew1-preload"
+log_name: "gogogo0316"
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_0312-rew1-preload.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC_classifier/train.py >nohup_sac_classifier.out 2>&1 &

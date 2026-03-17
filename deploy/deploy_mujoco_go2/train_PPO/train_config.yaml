@@ -2,12 +2,12 @@ go2_task: "terrain"
 go2_config: "go2.yaml"
 terrain_config: "terrain_config.yaml"
 
-total_timesteps: 60000
+total_timesteps: 80000
 max_episode_steps: 35
 
 # Device / Torch runtime
 # auto | cpu | cuda | cuda:0
-device: "cuda:0"
+device: "cuda:1"
 seed: 0
 torch_deterministic: false
 cudnn_benchmark: true
@@ -41,7 +41,8 @@ failure_flush_every_episodes: 50
 # Sampling-time/recording-time filter:
 # keep only first K frames in each consecutive fail+stuck run.
 # 0 means do not trim.
-consecutive_fail_keep_k: 0
+consecutive_fail_keep_k: 1
 
-log_name: "ppo_0312"
+log_name: "gogogo0316"
 
+# nohup python deploy/deploy_mujoco_go2/train_PPO/train.py >nohup_ppo.out 2>&1 &
