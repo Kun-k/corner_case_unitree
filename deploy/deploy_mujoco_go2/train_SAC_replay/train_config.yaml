@@ -1,0 +1,63 @@
+go2_task: "terrain"
+go2_config: "go2.yaml"
+terrain_config: "terrain_config.yaml"
+
+total_timesteps: 80000
+max_episode_steps: 35
+
+# Device / Torch runtime
+device: "cuda:0"
+seed: 0
+torch_deterministic: false
+cudnn_benchmark: true
+allow_tf32: true
+torch_num_threads: 0
+
+# SAC hyperparameters
+learning_rate: 0.0003
+batch_size: 256
+buffer_size: 1000000
+learning_starts: 100
+train_freq: 1
+gradient_steps: 1
+tau: 0.005
+gamma: 0.99
+
+# Logging / plotting / checkpoint intervals
+plot_save_every_steps: 2000
+plot_smooth_window: 20
+checkpoint_every_steps: 200
+
+# Optional warm-starts
+preload_model_path: ""
+preload_pkl_paths: []
+
+# Replay source chains (offline Markov chains)
+replay_pkl_paths:
+  - "../train_SAC/eval_logs/random_eval_0317-1"
+  - "../train_SAC/eval_logs/random_eval_0317-2"
+  - "../train_SAC/eval_logs/random_eval_0317-3"
+  - "../train_SAC/eval_logs/random_eval_0317-4"
+
+# Replay env behavior
+replay_require_trace: false
+replay_random_chain: true
+
+# Replay-buffer filtering: keep only first K frames in each consecutive fail+stuck run
+consecutive_fail_keep_k: 1
+
+# Optional classifier gate for action source selection during training
+classifier_gate:
+  enabled: false
+  checkpoint_path: "../train_offline/classifier/classifier_0316/checkpoint_epoch_860.pt"
+  threshold: 0.55
+  concat_action_to_obs: false
+  hidden_dim: 128
+  device: "cuda:0"
+  min_rl_buffer_size_for_update: 100
+
+failure_pkl_name: "collision_failures.pkl"
+failure_flush_every_episodes: 50
+
+log_name: "sac_replay_0318"
+

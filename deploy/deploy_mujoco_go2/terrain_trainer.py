@@ -261,21 +261,15 @@ class TerrainTrainer:
 
         info = {
             'terrain_reward': float(terrain_reward),
-            'terrain_action': np.asarray(terrain_action, dtype=np.float32).tolist(),
-            'go2_target_dof_pos': np.asarray(target_dof_pos, dtype=np.float32).tolist(),
-            'go2_last_tau': np.asarray(last_tau, dtype=np.float32).tolist(),
-            'trace_enabled': bool(self.trace_enabled),
             **terrain_info,
         }
         if self.trace_enabled:
-            info.update(
-                {
-                    'go2_rollout_trace': {
-                        'states': robot_states,
-                        'actions': robot_actions,
-                    }
-                }
-            )
+            info['go2_rollout_trace'] = {
+                'states': robot_states,
+                'actions': robot_actions,
+            }
+            info['terrain_action'] = np.asarray(terrain_action, dtype=np.float32).tolist()
+
         # done = False  # TODO 是否需要根据fall和collision判断
 
         # print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")

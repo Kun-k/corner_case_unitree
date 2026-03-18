@@ -201,6 +201,84 @@ class TerrainChanger:
 
         # self.last_action = np.asarray(action, dtype=np.float32).reshape(-1)
 
+    def apply_action_vector_with_robot(self, qpos, qvel, action):
+        """
+        Interpret a flat action vector according to self.action_dims and call
+        the appropriate setters (set_bump, set_slide_friction, set_solref).
+        """
+        action = np.asarray(action, dtype=np.float32).reshape(-1)
+
+        idx = 0
+
+        if 'bump' in self.action_dims:
+            cx_norm = float(action[idx + 0])
+            cy_norm = float(action[idx + 1])
+            radius = float(action[idx + 2])
+            height = float(action[idx + 3])
+
+            # map normalized cx/cy to world coordinates
+            # longitudinal distance ahead
+            # prefer robot base pos and velocity if available; otherwise use scene origin
+            robot_xy = qpos[:2].copy()
+            lin_vel = qvel[:2].copy()
+            speed = np.linalg.norm(lin_vel)
+
+            # 确定速度方向 dir_f
+            if speed > 1e-3:
+                dir_f = lin_vel / speed
+            else:
+                qw, qx, qy, qz = qpos[3:7]
+                yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+                dir_f = np.array([np.cos(yaw), np.sin(yaw)])
+
+            # dump 相对坐标圆心[dist, lat]
+            min_forward_dist = self.terrain_config['terrain_action']['min_forward_dist']
+            max_forward_dist = self.terrain_config['terrain_action']['max_forward_dist']
+            max_lateral = self.terrain_config['terrain_action']['max_lateral']
+            max_bump_height = self.terrain_config['terrain_action']['max_bump_height']
+
+            dist = min_forward_dist + (cx_norm + 1.0) / 2.0 * (max_forward_dist - min_forward_dist)
+            lat = cy_norm * max_lateral
+            perp = np.array([-dir_f[1], dir_f[0]])
+            target_xy = robot_xy + dir_f * dist + perp * lat
+            gx, gy = self._world_to_grid(float(target_xy[0]), float(target_xy[1]))
+
+            radius_min = self.terrain_config['terrain_action']['radius_min']
+            radius_max = self.terrain_config['terrain_action']['radius_max']
+            radius_grid_min = radius_min / self.grid_resolution
+            radius_grid_max = radius_max / self.grid_resolution
+            # scale radius to configured grid units
+            radius_scaled = (radius + 1.0) / 2.0 * (radius_grid_max - radius_grid_min) + radius_grid_min
+            # scale height to configured max
+            height_scaled = float(height) * max_bump_height
+
+            # 保护机器人所在区域不被修改
+            robot_gx, robot_gy = self._world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
+            self.set_bump(
+                int(gx),
+                int(gy),
+                float(radius_scaled),
+                float(height_scaled),
+                int(robot_gx),
+                int(robot_gy)
+            )
+
+            idx += self.action_dims['bump']
+
+        if 'slide_friction' in self.action_dims:
+            mu = float(action[idx])
+            mu_scaled = (mu + 1.0) / 2.0 * 1.5 + 0.1
+            self.set_slide_friction(float(mu_scaled))
+            idx += self.action_dims['slide_friction']
+
+        if 'solref' in self.action_dims:
+            sol = float(action[idx])
+            solref_scaled = (sol + 1.0) / 2.0 * 0.5 + 0.01
+            self.set_solref(float(solref_scaled))
+            idx += self.action_dims['solref']
+
+        # self.last_action = np.asarray(action, dtype=np.float32).reshape(-1)
+
     def set_bump(self, gx, gy, radius, height, robot_gx, robot_gy):
 
         # ['terrain_action']['no_change_radius']
