@@ -160,8 +160,16 @@ class ReplayTerrainGymEnv(gym.Env):
 
 
 def train_sac_replay(go2_cfg, terrain_cfg, cfg: Dict, reward_cfg: Dict, log_dir: str) -> None:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    replay_pkl_paths = []
+    preload_pkl_paths = []
+    for path in cfg.get("replay_pkl_paths", []):
+        replay_pkl_paths.append(os.path.join(current_dir, path))
+    for path in cfg.get("preload_pkl_paths", []):
+        preload_pkl_paths.append(os.path.join(current_dir, path))
+
     replay_chains = _load_replay_chains(
-        paths=cfg.get("replay_pkl_paths", []),
+        paths=replay_pkl_paths,
         keep_k=int(cfg.get("consecutive_fail_keep_k", 0)),
     )
     if len(replay_chains) == 0:
@@ -232,7 +240,7 @@ def train_sac_replay(go2_cfg, terrain_cfg, cfg: Dict, reward_cfg: Dict, log_dir:
             model.set_parameters(preload_model, exact_match=False, device=cfg.get("device", "auto"))
 
     # Task requirement: offline pkl data should also enter replay buffer.
-    preload_paths = list(cfg.get("preload_pkl_paths", [])) + list(cfg.get("replay_pkl_paths", []))
+    preload_paths = preload_pkl_paths + replay_pkl_paths
     if len(preload_paths) > 0:
         base = os.path.dirname(os.path.realpath(__file__))
         resolved = [p if os.path.isabs(p) else os.path.normpath(os.path.join(base, p)) for p in preload_paths]
