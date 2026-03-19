@@ -96,7 +96,7 @@ class TerrainChanger:
         grid_res_y = self.terrain_size_y / float(self.nrow)
         return float(grid_res_x), float(grid_res_y)
 
-    def _refresh_terrain(self):
+    def _refresh_terrain_safe(self):
         # --- [步骤 A] 备份当前机器人状态 ---
         qpos_backup = self.data.qpos.copy()
         qvel_backup = self.data.qvel.copy()
@@ -110,6 +110,9 @@ class TerrainChanger:
         self.data.act[:] = act_backup
 
         # mujoco.mj_forward(self.model, self.data)  # 修改地形后不直接做step，step在主逻辑中操作
+
+    def _refresh_terrain(self):
+        mujoco.mj_setConst(self.model, self.data)
 
     def _lift_robot_if_needed(self, foot_clearance_m):
         # Prevent severe penetration when terrain is suddenly raised under the robot.
@@ -200,6 +203,80 @@ class TerrainChanger:
             idx += self.action_dims['solref']
 
         # self.last_action = np.asarray(action, dtype=np.float32).reshape(-1)
+
+    def apply_action_vector_with_restore(self, action):
+        """
+        Interpret a flat action vector according to self.action_dims and call
+        the appropriate setters (set_bump, set_slide_friction, set_solref).
+        """
+        action = np.asarray(action, dtype=np.float32).reshape(-1)
+
+        idx = 0
+
+        if 'bump' in self.action_dims:
+            cx_norm = float(action[idx + 0])
+            cy_norm = float(action[idx + 1])
+            radius = float(action[idx + 2])
+            height = float(action[idx + 3])
+
+            # map normalized cx/cy to world coordinates
+            # longitudinal distance ahead
+            # prefer robot base pos and velocity if available; otherwise use scene origin
+            robot_xy = self.data.qpos[:2].copy()
+            lin_vel = self.data.qvel[:2].copy()
+            speed = np.linalg.norm(lin_vel)
+
+            # 确定速度方向 dir_f
+            if speed > 1e-3:
+                dir_f = lin_vel / speed
+            else:
+                qw, qx, qy, qz = self.data.qpos[3:7]
+                yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+                dir_f = np.array([np.cos(yaw), np.sin(yaw)])
+
+            # dump 相对坐标圆心[dist, lat]
+            min_forward_dist = self.terrain_config['terrain_action']['min_forward_dist']
+            max_forward_dist = self.terrain_config['terrain_action']['max_forward_dist']
+            max_lateral = self.terrain_config['terrain_action']['max_lateral']
+            max_bump_height = self.terrain_config['terrain_action']['max_bump_height']
+
+            dist = min_forward_dist + (cx_norm + 1.0) / 2.0 * (max_forward_dist - min_forward_dist)
+            lat = cy_norm * max_lateral
+            perp = np.array([-dir_f[1], dir_f[0]])
+            target_xy = robot_xy + dir_f * dist + perp * lat
+            gx, gy = self._world_to_grid(float(target_xy[0]), float(target_xy[1]))
+
+            radius_min = self.terrain_config['terrain_action']['radius_min']
+            radius_max = self.terrain_config['terrain_action']['radius_max']
+            radius_grid_min = radius_min / self.grid_resolution
+            radius_grid_max = radius_max / self.grid_resolution
+            # scale radius to configured grid units
+            radius_scaled = (radius + 1.0) / 2.0 * (radius_grid_max - radius_grid_min) + radius_grid_min
+            # scale height to configured max
+            height_scaled = float(height) * max_bump_height
+
+            # 保护机器人所在区域不被修改
+            robot_gx, robot_gy = self._world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
+            restore_info = self.set_bump_with_restore(
+                int(gx),
+                int(gy),
+                float(radius_scaled),
+                float(height_scaled),
+                int(robot_gx),
+                int(robot_gy)
+            )
+
+            idx += self.action_dims['bump']
+
+            return restore_info
+
+        if 'slide_friction' in self.action_dims:
+            return None
+
+        if 'solref' in self.action_dims:
+            return None
+
+        return None
 
     def apply_action_vector_with_robot(self, qpos, qvel, action):
         """
@@ -314,6 +391,40 @@ class TerrainChanger:
         geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "terrain")
         self.model.geom_solref[geom_id] = np.array([solref, 1.0])
 
+    def set_bump_with_restore(self, gx, gy, radius, height, robot_gx, robot_gy):
+        restore_info = []
+
+        # ['terrain_action']['no_change_radius']
+        no_change_radius = self.terrain_config.get('terrain_action', {}).get('no_change_radius', False)
+        no_change_radius_grid = no_change_radius / self.grid_resolution
+
+        for row in range(self.nrow):
+            for col in range(self.ncol):
+
+                dx = col - gx
+                dy = row - gy
+                dist = np.sqrt(dx * dx + dy * dy)
+
+                if dist < radius:
+
+                    # ===== 机器人保护区域 =====
+                    dx_r = col - robot_gx
+                    dy_r = row - robot_gy
+                    dist_robot = np.sqrt(dx_r * dx_r + dy_r * dy_r)
+
+                    if no_change_radius and dist_robot < no_change_radius_grid:
+                        continue  # 不允许修改
+
+                    restore_info.append((row, col, self.hfield[row, col]))  # 记录修改前的高度值，以便后续恢复
+                    self.hfield[row, col] = height * np.exp(
+                        -dist ** 2 / (2 * radius ** 2)
+                    )
+        return restore_info
+
+    def set_restore_bump(self, restore_info):
+        for row, col, original_height in restore_info:
+            self.hfield[row, col] = original_height
+
     # TODO 检查有没有多余的调用
     def enforce_safe_spawn_area(self, center_world=(0.0, 0.0), safe_radius_m=1.0, blend_radius_m=1.0, target_height=0.0):
         """
@@ -343,7 +454,7 @@ class TerrainChanger:
         w = t * t * (3.0 - 2.0 * t)
 
         self.hfield[:, :] = (1.0 - w) * target_height + w * self.hfield[:, :]
-        self._refresh_terrain()
+        self._refresh_terrain_safe()
 
     # TODO 初始化速度很慢
     def generate_bumps_terrain(self, bumps_array, safe_pos=(0.0, 0.0), safe_radius=0):
@@ -381,7 +492,7 @@ class TerrainChanger:
             blend_radius_m=max(0.2, float(safe_radius)),
             target_height=0.0,
         )
-        self._refresh_terrain()
+        self._refresh_terrain_safe()
 
     # TODO 后续考虑把三角函数组合的参数中，xy位置也可控（但是参数也会变多）
     def generate_trig_terrain(self, angle_array):
@@ -420,7 +531,7 @@ class TerrainChanger:
 
         # Write back to hfield.
         self.hfield[:, :] = terrain
-        self._refresh_terrain()
+        self._refresh_terrain_safe()
 
     def generate_plum_blossom_piles(self, num_x, num_y, center_world=(0.0, 0.0), base_height=0.1, pile_size_m=0.08, gap_m=0.01):
         """Generate rectangular plum-blossom piles and cache each pile region.
@@ -464,7 +575,7 @@ class TerrainChanger:
                 self.hfield[r0:r1, c0:c1] = base_height
                 self._pile_regions[(ix, iy)] = (r0, r1, c0, c1)
 
-        self._refresh_terrain()
+        self._refresh_terrain_safe()
 
     # TODO 检查是否有问题
     def update_plum_blossom_piles(self, control_list):
@@ -484,7 +595,7 @@ class TerrainChanger:
 
         foot_clearance_m = float(self.terrain_config.get("plum_blossom", {}).get("foot_clearance_m", 0))
         self._lift_robot_if_needed(foot_clearance_m)
-        self._refresh_terrain()
+        self._refresh_terrain_safe()
 
 
 if __name__ == "__main__":

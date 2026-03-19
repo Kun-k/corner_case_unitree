@@ -175,13 +175,15 @@ class TerrainTrainer:
             self.viewer.cam.distance = 1.5
             self.viewer.cam.lookat[:] = self.data.qpos[:3]
 
+    def render_hfield(self):
+        if self.render:
+            self.viewer.update_hfield(self.terrain_changer.hfield_id)
+            self.viewer.sync()
+
     def step(self, terrain_action):
 
         self.step_counter += 1
 
-        pre_qpos = None
-        pre_qvel = None
-        pre_robot_obs = None
         robot_states = None
         robot_actions = None
         if self.trace_enabled:
@@ -199,7 +201,7 @@ class TerrainTrainer:
 
         # apply terrain action via TerrainChanger and remember it
         self.terrain_changer.apply_action_vector(terrain_action)
-        self.terrain_changer._refresh_terrain()
+        self.terrain_changer._refresh_terrain_safe()
 
         if self.render:
             self.viewer.update_hfield(self.terrain_changer.hfield_id)  # TODO 确保修改地形后一定update hfield
@@ -209,7 +211,6 @@ class TerrainTrainer:
 
         # run robot controller with zero-order hold on tau
         target_dof_pos = self.go2_controller.default_angles.copy()
-        last_tau = np.zeros_like(self.data.ctrl)
         for sim_i in range(total_sim_steps):
             self.robot_counter += 1
             step_start = time.time()
@@ -217,7 +218,6 @@ class TerrainTrainer:
             if sim_i % int(self.control_decimation) == 0:
                 target_dof_pos = self.go2_controller.compute_action(self.data)
             tau = pd_control(target_dof_pos, self.data.qpos[7:], self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
-            last_tau = tau.copy()
 
             if self.trace_enabled:
                 robot_actions.append(
@@ -279,17 +279,16 @@ class TerrainTrainer:
 
         return next_terrain_obs, np.asarray(terrain_action, dtype=np.float32), float(terrain_reward), done, info
 
-    def step_only_robot(self):
-        # run robot controller with zero-order hold on tau
+    def step_only_robot(self, terrain_decimation=1):
         target_dof_pos = self.go2_controller.default_angles.copy()
-        for sim_i in range(self.control_decimation):
+        for sim_i in range(self.control_decimation * terrain_decimation):
             self.robot_counter += 1
             step_start = time.time()
             # at control boundaries compute new target and tau
             if sim_i % int(self.control_decimation) == 0:
                 target_dof_pos = self.go2_controller.compute_action(self.data)
-            tau = pd_control(target_dof_pos, self.data.qpos[7:], self.go2_controller.kps,
-                             np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
+            tau = pd_control(target_dof_pos, self.data.qpos[7:], self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), self.data.qvel[6:], self.go2_controller.kds)
+
             self.data.ctrl[:] = tau
             mujoco.mj_step(self.model, self.data)
 
@@ -306,12 +305,21 @@ class TerrainTrainer:
         # compute terrain reward and next obs
         terrain_reward, terrain_info, done = self.compute_terrain_reward()
 
-        info = {'terrain_reward': float(terrain_reward), **terrain_info}
+        # Update last action before reading next observation so obs can include current terrain action.
+        # self.terrain_changer.last_action = np.asarray(terrain_action, dtype=np.float32)
+        next_terrain_obs = self.get_terrain_observation()
 
-        # print(
-        #     f"robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
+        info = {
+            'terrain_reward': float(terrain_reward),
+            **terrain_info,
+        }
 
-        return None, None, float(terrain_reward), done, info
+        # print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
+        # if terrain_reward != 0.0:
+        if terrain_reward >= 1.0:
+            print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}, info: {terrain_info}")
+
+        return next_terrain_obs, None, float(terrain_reward), done, info
 
     # TODO 梅花桩相关
     def set_robot_spawn_pose(self, x=0.0, y=0.0, z=None, yaw=0.0):
