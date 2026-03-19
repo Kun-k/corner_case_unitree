@@ -31,7 +31,7 @@ visualization:
 
 logging:
   # If true, info will include full per-substep Go2 trace (large payload).
-  enable_trace: False
+  enable_trace: True
 
 
 event_and_reward:

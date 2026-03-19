@@ -8,22 +8,22 @@ checkpoint: ""
 #checkpoint: "checkpoint_step_22000"
 
 go2_task: "terrain"
-go2_config: "go2_2.yaml"
+go2_config: "go2.yaml"
 terrain_config: "terrain_config.yaml"
 
-episodes: 4000
+episodes: 8000
 
 max_episode_steps: 35
-seed: 4
+seed: 7
 
-log_name: "nohup_random_eval_go2-2_15cm_4"
-#log_name: "random_eval_0311-4"
+#log_name: "nohup_random_eval_go2-2_15cm_4"
+log_name: "random_eval_0317-4"
 #log_name: "sac_eval_0313-2"
 
 use_curr_force: False  # 强制使用当前配置
 
 render: False
-save_non_failure_trajectories: True
+save_non_failure_trajectories: False
 
 classifier_gate:
   enabled: false
@@ -37,4 +37,4 @@ classifier_gate:
 #nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_22000.out 2>&1 &
 
 # nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_go2-2_15cm_1.out 2>&1 &
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_sac_eval.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_sac_eval_1.out 2>&1 &

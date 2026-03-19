@@ -56,7 +56,7 @@ consecutive_fail_keep_k: 1
 # If enabled: classifier score > threshold => use SAC action, else random action.
 # Only SAC-selected transitions are inserted into replay buffer.
 classifier_gate:
-  enabled: false
+  enabled: true
   checkpoint_path: "../train_offline/classifier/classifier_0316/checkpoint_epoch_860.pt"
   threshold: 0.55
   concat_action_to_obs: false
@@ -68,6 +68,8 @@ classifier_gate:
 failure_pkl_name: "collision_failures.pkl"
 failure_flush_every_episodes: 50
 
-log_name: "go2_2-10cm-preload-0317"
+#log_name: "sac_classifier"
+log_name: "debug"
 
 # nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >go2_2-10cm-preload-0317.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_classifier.out 2>&1 &
