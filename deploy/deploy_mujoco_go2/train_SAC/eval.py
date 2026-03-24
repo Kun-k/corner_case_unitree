@@ -3,6 +3,7 @@ import os
 import csv
 import pickle
 import numpy as np
+import torch
 from stable_baselines3 import SAC
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
 from deploy.deploy_mujoco_go2.classifier_gate import ClassifierGate
@@ -37,6 +38,26 @@ def _append_csv_row(csv_path, row):
         if write_header:
             writer.writeheader()
         writer.writerow(row)
+
+
+def _sample_uniform_action_with_density(action_space, rng):
+    low = np.asarray(action_space.low, dtype=np.float64)
+    high = np.asarray(action_space.high, dtype=np.float64)
+    action = rng.uniform(low, high).astype(np.float32)
+    width = np.maximum(high - low, 1e-12)
+    density = float(1.0 / np.prod(width))
+    return action, density
+
+
+def _sample_sac_action_with_density(model, obs):
+    obs_np = np.asarray(obs, dtype=np.float32)
+    obs_tensor = torch.as_tensor(obs_np, device=model.device).unsqueeze(0)
+    with torch.no_grad():
+        action_tensor, log_prob_tensor = model.policy.actor.action_log_prob(obs_tensor)
+    action = action_tensor.detach().cpu().numpy().reshape(-1).astype(np.float32)
+    log_prob = float(log_prob_tensor.detach().cpu().numpy().reshape(-1)[0])
+    density = float(np.exp(np.clip(log_prob, -60.0, 60.0)))
+    return action, log_prob, density
 
 
 def evaluate_policy(
@@ -100,19 +121,29 @@ def evaluate_policy(
 
             print(f"Episode {ep+1}/{episodes}, Step {step_idx+1}/{max_episode_steps}", end="\r")
 
+            action_log_prob = np.nan
+            gate_score = np.nan
+
             if model is None:
-                action = rng.uniform(-1.0, 1.0, size=env.action_space.shape).astype(np.float32)
+                action, action_prob_density = _sample_uniform_action_with_density(env.action_space, rng)
+                action_source = "random"
             else:
-                rl_action, _ = model.predict(obs, deterministic=False)
-                rl_action = np.asarray(rl_action, dtype=np.float32)
+                rl_action, rl_log_prob, rl_density = _sample_sac_action_with_density(model, obs)
                 if classifier_gate is None:
                     action = rl_action
+                    action_log_prob = float(rl_log_prob)
+                    action_prob_density = float(rl_density)
+                    action_source = "sac"
                 else:
-                    score = float(classifier_gate.predict_proba(np.asarray(obs, dtype=np.float32), rl_action)[0])
-                    if score > float(classifier_threshold):
+                    gate_score = float(classifier_gate.predict_proba(np.asarray(obs, dtype=np.float32), rl_action)[0])
+                    if gate_score > float(classifier_threshold):
                         action = rl_action
+                        action_log_prob = float(rl_log_prob)
+                        action_prob_density = float(rl_density)
+                        action_source = "sac"
                     else:
-                        action = rng.uniform(-1.0, 1.0, size=env.action_space.shape).astype(np.float32)
+                        action, action_prob_density = _sample_uniform_action_with_density(env.action_space, rng)
+                        action_source = "random"
             next_obs, reward, terminated, truncated, info = env.step(action)
 
             # info_dict = {
@@ -128,6 +159,10 @@ def evaluate_policy(
             transition = {
                 "obs": np.asarray(obs, dtype=np.float32).tolist(),
                 "action": np.asarray(action, dtype=np.float32).tolist(),
+                "action_source": action_source,
+                "action_log_prob": float(action_log_prob) if np.isfinite(action_log_prob) else None,
+                "action_prob_density": float(action_prob_density),
+                "action_gate_score": float(gate_score) if np.isfinite(gate_score) else None,
                 "reward": float(reward),
                 "next_obs": np.asarray(next_obs, dtype=np.float32).tolist(),
                 "done": bool(terminated or truncated),
