@@ -212,11 +212,6 @@ class FrameReplayCollector:
         # 更新机器人状态，与当前离线数据同步
         qpos, qvel = self._restore_robot_state(robot_state)
 
-        print(tr["info"]["fallen"])
-        print(tr["info"]["base_collision"])
-        print(tr["info"]["thigh_collision"])
-        print(tr["info"]["stuck"])
-
         # 计算地形动作
         action = self.sample_policy(np.expand_dims(obs, 0), deterministic=False)[0]
 
@@ -244,8 +239,6 @@ class FrameReplayCollector:
             self.trainer.terrain_changer.apply_action_vector_with_robot(qpos, qvel, action_in_tr)
             self.trainer.terrain_changer._refresh_terrain()
             self.trainer.render_hfield()
-
-        input("step end")
 
         return next_obs, action, float(reward), done, info_out, replay_done
 
@@ -294,6 +287,108 @@ def _save_checkpoint(
     torch.save(payload, ckpt_path)
 
 
+def _infer_done_reason(info: Dict[str, Any]) -> str:
+    if bool(info.get("out_of_terrain_edge", False)):
+        return "terrain_edge"
+    if bool(info.get("fallen", False)):
+        return "fall"
+    if bool(info.get("base_collision", False)):
+        return "base_collision"
+    return "other_done"
+
+
+def run_eval_rollouts(
+    trainer: TerrainTrainer,
+    sample_policy: SamplerPolicy,
+    episodes: int,
+    max_episode_steps: int,
+    deterministic: bool,
+) -> Dict[str, Any]:
+    episodes = max(1, int(episodes))
+    max_episode_steps = max(1, int(max_episode_steps))
+
+    returns: List[float] = []
+    lengths: List[int] = []
+    done_reasons: Dict[str, int] = {
+        "terrain_edge": 0,
+        "fall": 0,
+        "base_collision": 0,
+        "other_done": 0,
+        "timeout": 0,
+    }
+
+    fallen_eps = 0
+    base_collision_eps = 0
+    thigh_collision_eps = 0
+    stuck_eps = 0
+    speed_values: List[float] = []
+
+    for _ in range(episodes):
+        obs = np.asarray(trainer.reset(), dtype=np.float32)
+        ep_return = 0.0
+        ep_len = 0
+        ep_fallen = False
+        ep_base_collision = False
+        ep_thigh_collision = False
+        ep_stuck = False
+        terminated = False
+
+        for _t in range(max_episode_steps):
+            action = sample_policy(np.expand_dims(obs, 0), deterministic=deterministic)[0]
+            next_obs, _, reward, done, info = trainer.step(action)
+            obs = np.asarray(next_obs, dtype=np.float32)
+
+            ep_return += float(reward)
+            ep_len += 1
+
+            ep_fallen = ep_fallen or bool(info.get("fallen", False))
+            ep_base_collision = ep_base_collision or bool(info.get("base_collision", False))
+            ep_thigh_collision = ep_thigh_collision or bool(info.get("thigh_collision", False))
+            ep_stuck = ep_stuck or bool(info.get("stuck", False))
+            if "speed" in info:
+                speed_values.append(float(info["speed"]))
+
+            if bool(done):
+                done_reasons[_infer_done_reason(info)] += 1
+                terminated = True
+                break
+
+        if not terminated:
+            done_reasons["timeout"] += 1
+
+        returns.append(ep_return)
+        lengths.append(ep_len)
+        fallen_eps += int(ep_fallen)
+        base_collision_eps += int(ep_base_collision)
+        thigh_collision_eps += int(ep_thigh_collision)
+        stuck_eps += int(ep_stuck)
+
+    returns_np = np.asarray(returns, dtype=np.float64)
+    lengths_np = np.asarray(lengths, dtype=np.float64)
+    total_steps = max(1.0, float(lengths_np.sum()))
+
+    return {
+        "eval_episodes": int(episodes),
+        "eval_return_mean": float(np.mean(returns_np)),
+        "eval_return_std": float(np.std(returns_np)),
+        "eval_return_min": float(np.min(returns_np)),
+        "eval_return_max": float(np.max(returns_np)),
+        "eval_episode_len_mean": float(np.mean(lengths_np)),
+        "eval_reward_per_step": float(float(np.sum(returns_np)) / total_steps),
+        "eval_terminated_rate": float(1.0 - (done_reasons["timeout"] / float(episodes))),
+        "eval_timeout_rate": float(done_reasons["timeout"] / float(episodes)),
+        "eval_fall_rate": float(fallen_eps / float(episodes)),
+        "eval_base_collision_rate": float(base_collision_eps / float(episodes)),
+        "eval_thigh_collision_rate": float(thigh_collision_eps / float(episodes)),
+        "eval_stuck_rate": float(stuck_eps / float(episodes)),
+        "eval_speed_mean": float(np.mean(np.asarray(speed_values, dtype=np.float64))) if len(speed_values) > 0 else np.nan,
+        "eval_done_terrain_edge_rate": float(done_reasons["terrain_edge"] / float(episodes)),
+        "eval_done_fall_rate": float(done_reasons["fall"] / float(episodes)),
+        "eval_done_base_collision_rate": float(done_reasons["base_collision"] / float(episodes)),
+        "eval_done_other_rate": float(done_reasons["other_done"] / float(episodes)),
+    }
+
+
 def train(cfg: Dict[str, Any]) -> None:
     _configure_torch_runtime(cfg)
     _set_seed(int(cfg.get("seed", 0)))
@@ -317,6 +412,13 @@ def train(cfg: Dict[str, Any]) -> None:
         # Fallback to train_SAC terrain config for compatibility with old setups.
         terrain_cfg_rel = f"train_SAC/{terrain_cfg_name}"
     trainer = TerrainTrainer(go2_cfg, terrain_cfg_rel)
+
+    eval_enabled = bool(cfg.get("eval_enabled", False))
+    eval_every_updates = max(1, int(cfg.get("eval_every_updates", 1)))
+    eval_episodes = max(1, int(cfg.get("eval_episodes", 5)))
+    eval_max_episode_steps = max(1, int(cfg.get("eval_max_episode_steps", 200)))
+    eval_deterministic = bool(cfg.get("eval_deterministic", True))
+    eval_trainer = TerrainTrainer(go2_cfg, terrain_cfg_rel) if eval_enabled else None
 
     replay_paths = [
         p if os.path.isabs(p) else os.path.normpath(os.path.join(CURRENT_DIR, p))
@@ -374,6 +476,7 @@ def train(cfg: Dict[str, Any]) -> None:
     collector.set_sample_policy(sampler_policy)
 
     csv_logger = CsvLogger(os.path.join(log_dir, "metrics.csv"))
+    eval_csv_logger = CsvLogger(os.path.join(log_dir, "eval_metrics.csv")) if eval_enabled else None
     total_timesteps = int(cfg.get("total_timesteps", 80_000))
     batch_size = int(cfg.get("batch_size", 256))
     learning_starts = int(cfg.get("learning_starts", 1000))
@@ -385,6 +488,7 @@ def train(cfg: Dict[str, Any]) -> None:
     episode_return = 0.0
     episode_len = 0
     episodes = 0
+    updates = 0
     obs = obs0
 
     for step in range(1, total_timesteps + 1):
@@ -402,6 +506,32 @@ def train(cfg: Dict[str, Any]) -> None:
                 out = sac.train(batch)
                 if grad_i == gradient_steps - 1:
                     train_metrics = out
+
+            updates += 1
+            if eval_enabled and eval_trainer is not None and eval_csv_logger is not None and updates % eval_every_updates == 0:
+                eval_metrics = run_eval_rollouts(
+                    trainer=eval_trainer,
+                    sample_policy=sampler_policy,
+                    episodes=eval_episodes,
+                    max_episode_steps=eval_max_episode_steps,
+                    deterministic=eval_deterministic,
+                )
+                eval_metrics.update(
+                    {
+                        "step": int(step),
+                        "update": int(updates),
+                        "buffer_size": int(replay_buffer.size),
+                        "deterministic": bool(eval_deterministic),
+                    }
+                )
+                eval_csv_logger.add(eval_metrics)
+                eval_csv_logger.flush()
+                print(
+                    f"[train_SAC_replay][eval] step={step} update={updates} "
+                    f"return_mean={eval_metrics['eval_return_mean']:.4f} "
+                    f"fall_rate={eval_metrics['eval_fall_rate']:.3f} "
+                    f"base_collision_rate={eval_metrics['eval_base_collision_rate']:.3f}"
+                )
 
         # TODO 这样只能比较step average reward了
         if replay_done:
@@ -437,8 +567,12 @@ def train(cfg: Dict[str, Any]) -> None:
             _save_checkpoint(ckpt, sac, replay_buffer, step, cfg)
 
     csv_logger.flush()
+    if eval_csv_logger is not None:
+        eval_csv_logger.flush()
     _save_checkpoint(os.path.join(log_dir, "model_final.pt"), sac, replay_buffer, total_timesteps, cfg)
     trainer.close_viewer()
+    if eval_trainer is not None:
+        eval_trainer.close_viewer()
 
 
 def main() -> None:
