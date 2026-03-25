@@ -1,16 +1,17 @@
 import numpy as np
 from stable_baselines3.common.buffers import ReplayBuffer
+from deploy.deploy_mujoco_go2.offline_data_utils import filter_chain_for_replay
 
 
 class FailureReplayBuffer(ReplayBuffer):
     """Replay buffer with failure-biased replay.
 
     Base behavior:
-    - Always store incoming transitions (prevents empty buffer / sampling crash).
+    - Store selected transitions once.
 
     Bias behavior:
-    - Also store a second copy of full episode transitions if the episode is
-      failure-relevant or cumulative reward is high.
+    - Mark selected rows as dense-selected if episode is failure-relevant
+      or cumulative reward is high, then prioritize those rows in sampling.
     """
 
     def __init__(self, *args, reward_threshold=8.0, dense_sample_ratio=0.7, consecutive_fail_keep_k=0, **kwargs):
@@ -19,8 +20,6 @@ class FailureReplayBuffer(ReplayBuffer):
         self.dense_sample_ratio = float(np.clip(dense_sample_ratio, 0.0, 1.0))
         self.consecutive_fail_keep_k = int(max(0, consecutive_fail_keep_k))
         self._pending = [[] for _ in range(self.n_envs)]
-        self._episode_reward = np.zeros((self.n_envs,), dtype=np.float32)
-        self._stuck_fail_run = np.zeros((self.n_envs,), dtype=np.int32)
         # True means this row was inserted as dense-selected transition.
         self._dense_mask = np.zeros((self.buffer_size,), dtype=np.bool_)
 
@@ -35,54 +34,50 @@ class FailureReplayBuffer(ReplayBuffer):
             or info.get("stuck", False)
         )
 
-    def _push_single_transition(self, tr):
-        o, no, a, r, d, i = tr
-        info = dict(i) if isinstance(i, dict) else {}
-        info["dense_selected"] = True
-        super().add(
-            np.expand_dims(o, axis=0),
-            np.expand_dims(no, axis=0),
-            np.expand_dims(a, axis=0),
-            np.array([r], dtype=np.float32),
-            np.array([d], dtype=np.float32),
-            [info],
+    def _select_episode_transitions(self, episode_chain):
+        return filter_chain_for_replay(
+            episode_chain,
+            consecutive_fail_keep_k=int(self.consecutive_fail_keep_k),
         )
-        inserted_idx = (self.pos - 1) % self.buffer_size
-        self._dense_mask[inserted_idx] = True
+
+    def _flush_episode(self, env_idx: int):
+        ep = self._pending[env_idx]
+        if not ep:
+            return
+
+        selected = self._select_episode_transitions(ep)
+        if len(selected) == 0:
+            self._pending[env_idx] = []
+            return
+
+        ep_reward = float(np.sum([float(t["reward"]) for t in selected]))
+        has_failure = any(self._is_failure_info(t["info"]) for t in selected)
+        has_high_reward = ep_reward >= self.reward_threshold
+        dense_selected = bool(has_failure or has_high_reward)
+
+        inserted_indices = []
+        for tr in selected:
+            info = dict(tr["info"]) if isinstance(tr["info"], dict) else {}
+            info["dense_selected"] = dense_selected
+            super().add(
+                np.expand_dims(tr["obs"], axis=0),
+                np.expand_dims(tr["next_obs"], axis=0),
+                np.expand_dims(tr["action"], axis=0),
+                np.array([tr["reward"]], dtype=np.float32),
+                np.array([float(bool(tr["done"]))], dtype=np.float32),
+                [info],
+            )
+            inserted_indices.append((self.pos - 1) % self.buffer_size)
+
+        for idx in inserted_indices:
+            self._dense_mask[idx] = dense_selected
+
+        self._pending[env_idx] = []
 
     def add(self, obs, next_obs, action, reward, done, infos):
-        # Always keep the base stream so SB3 can sample from step 1+.
-        safe_infos = []
-        if isinstance(infos, (list, tuple)):
-            for info in infos:
-                info_dict = dict(info) if isinstance(info, dict) else {}
-                info_dict.setdefault("dense_selected", False)
-                safe_infos.append(info_dict)
-        else:
-            safe_infos = [dict(dense_selected=False) for _ in range(self.n_envs)]
+        if not isinstance(infos, (list, tuple)):
+            infos = [{} for _ in range(self.n_envs)]
 
-        keep = np.ones((self.n_envs,), dtype=np.bool_)
-        if self.consecutive_fail_keep_k > 0:
-            for env_idx in range(self.n_envs):
-                info = safe_infos[env_idx] if env_idx < len(safe_infos) else {}
-                is_fail = self._is_failure_info(info)
-                is_stuck = bool(info.get("stuck", False)) if isinstance(info, dict) else False
-
-                if is_fail and is_stuck:
-                    self._stuck_fail_run[env_idx] += 1
-                    if self._stuck_fail_run[env_idx] > self.consecutive_fail_keep_k:
-                        keep[env_idx] = False
-                else:
-                    self._stuck_fail_run[env_idx] = 0
-
-        if np.any(keep):
-            super().add(obs[keep], next_obs[keep], action[keep], reward[keep], done[keep], [safe_infos[i] for i in np.where(keep)[0]])
-
-            # Mark base stream as non-dense-selected.
-            inserted_idx = (self.pos - 1) % self.buffer_size
-            self._dense_mask[inserted_idx] = False
-
-        # Keep episode-level cache and duplicate selected episodes for bias.
         obs = np.asarray(obs)
         next_obs = np.asarray(next_obs)
         action = np.asarray(action)
@@ -90,29 +85,19 @@ class FailureReplayBuffer(ReplayBuffer):
         done = np.asarray(done).reshape(-1)
 
         for env_idx in range(self.n_envs):
-            info = safe_infos[env_idx] if env_idx < len(safe_infos) else {}
-            tr = (
-                obs[env_idx].copy(),
-                next_obs[env_idx].copy(),
-                action[env_idx].copy(),
-                float(reward[env_idx]),
-                float(done[env_idx]),
-                info,
-            )
-            if keep[env_idx]:
-                self._pending[env_idx].append(tr)
-                self._episode_reward[env_idx] += float(reward[env_idx])
+            info = dict(infos[env_idx]) if env_idx < len(infos) and isinstance(infos[env_idx], dict) else {}
+            tr = {
+                "obs": obs[env_idx].copy(),
+                "next_obs": next_obs[env_idx].copy(),
+                "action": action[env_idx].copy(),
+                "reward": float(reward[env_idx]),
+                "done": float(done[env_idx]),
+                "info": info,
+            }
+            self._pending[env_idx].append(tr)
 
             if bool(done[env_idx]):
-                ep = self._pending[env_idx]
-                has_failure = any(self._is_failure_info(t[5]) for t in ep)
-                has_high_reward = self._episode_reward[env_idx] >= self.reward_threshold
-                if has_failure or has_high_reward:
-                    for t in ep:
-                        self._push_single_transition(t)
-
-                self._pending[env_idx] = []
-                self._episode_reward[env_idx] = 0.0
+                self._flush_episode(env_idx)
 
     def sample(self, batch_size, env=None):
         """Prioritize dense-selected rows during sampling.

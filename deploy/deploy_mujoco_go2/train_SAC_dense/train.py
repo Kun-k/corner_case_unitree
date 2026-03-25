@@ -10,7 +10,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecCheckNan
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
-from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file
+from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file, filter_chain_for_replay
 from deploy.deploy_mujoco_go2.reward_recompute_utils import (
     load_reward_cfg_from_yaml,
     recompute_reward_from_info,
@@ -156,12 +156,13 @@ def preload_replay_buffer_from_pkl(model, pkl_paths, reward_cfg=None, consecutiv
 
     for fp in files:
         try:
-            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=int(consecutive_fail_keep_k))
+            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=0)
         except Exception:
             continue
 
         for chain in chains:
-            for tr in chain:
+            filtered_chain = filter_chain_for_replay(chain, consecutive_fail_keep_k=int(consecutive_fail_keep_k))
+            for tr in filtered_chain:
                 try:
                     obs = np.asarray(tr.get("obs", []), dtype=np.float32).reshape(obs_shape)
                     next_obs = np.asarray(tr.get("next_obs", []), dtype=np.float32).reshape(obs_shape)

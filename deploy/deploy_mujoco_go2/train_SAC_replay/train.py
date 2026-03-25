@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import yaml
 
-from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file
+from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file, filter_chain_for_replay
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer
 
 CURRENT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -58,8 +58,11 @@ def _collect_replay_chains(paths: Sequence[str], keep_k: int) -> List[List[Dict[
     chains_all: List[List[Dict[str, Any]]] = []
     for fp in files:
         try:
-            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=int(keep_k))
-            chains_all.extend(chains)
+            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=0)
+            for chain in chains:
+                filtered = filter_chain_for_replay(chain, consecutive_fail_keep_k=int(keep_k))
+                if len(filtered) > 0:
+                    chains_all.append(filtered)
         except Exception:
             continue
     return chains_all
@@ -223,18 +226,20 @@ class FrameReplayCollector:
         # 执行仿真
         next_obs_sim, _, reward, done_sim, info = self.trainer.step_only_robot(self.trainer.terrain_decimation)
         next_obs = np.asarray(next_obs_sim, dtype=np.float32)
+        chain_done = bool(tr.get("done", False))
         self._frame_idx += 1
         replay_done = self._frame_idx >= len(self._curr_chain)
-        done = bool(done_sim or replay_done)
+        done = bool(done_sim or replay_done or chain_done)
 
         # 记录info
         info_out = dict(info) if isinstance(info, dict) else {}
         info_out["replay_frame_idx"] = int(self._frame_idx)
         info_out["replay_done"] = bool(replay_done)
         info_out["env_done"] = bool(done_sim)
+        info_out["chain_done"] = bool(chain_done)
 
         # 恢复地形状态至上一帧，并执行离线数据的地形动作
-        if not replay_done:
+        if not done:
             self.trainer.terrain_changer.set_restore_bump(restore_info)
             self.trainer.terrain_changer.apply_action_vector_with_robot(qpos, qvel, action_in_tr)
             self.trainer.terrain_changer._refresh_terrain()
@@ -534,7 +539,7 @@ def train(cfg: Dict[str, Any]) -> None:
                 )
 
         # TODO 这样只能比较step average reward了
-        if replay_done:
+        if done:
             episodes += 1
             csv_logger.add(
                 {
@@ -544,6 +549,7 @@ def train(cfg: Dict[str, Any]) -> None:
                     "episode_len": int(episode_len),
                     "buffer_size": int(replay_buffer.size),
                     "env_done": bool(info.get("env_done", False)),
+                    "chain_done": bool(info.get("chain_done", False)),
                     "replay_done": bool(info.get("replay_done", False)),
                     "policy_loss": float(train_metrics.get("policy_loss", np.nan)),
                     "qf1_loss": float(train_metrics.get("qf1_loss", np.nan)),

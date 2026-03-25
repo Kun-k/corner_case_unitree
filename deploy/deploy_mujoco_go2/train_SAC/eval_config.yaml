@@ -1,8 +1,11 @@
 #policy: "sac_0312-rew1-preload"  # random表示随机策略，其余情况下则查找训练好的模型
 #checkpoint: "checkpoint_step_40000"
 
-policy: "random"
-checkpoint: ""
+policy: "gogogo0316_preload"
+checkpoint: "checkpoint_step_15000"
+
+#policy: "random"
+#checkpoint: ""
 
 #policy: "sac_0310-rew2"  # random表示随机策略，其余情况下则查找训练好的模型
 #checkpoint: "checkpoint_step_22000"
@@ -14,11 +17,12 @@ terrain_config: "terrain_config.yaml"
 episodes: 8000
 
 max_episode_steps: 35
-seed: 7
+seed: 122
 
 #log_name: "nohup_random_eval_go2-2_15cm_4"
-log_name: "random_eval_0317-4"
-#log_name: "sac_eval_0313-2"
+#log_name: "random_eval_0317-7"
+#log_name: "debug"
+log_name: "sac_eval_gogogo0316_preload"
 
 use_curr_force: False  # 强制使用当前配置
 
@@ -36,5 +40,5 @@ classifier_gate:
 #nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_21000.out 2>&1 &
 #nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_22000.out 2>&1 &
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval_go2-2_15cm_1.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_random_eval-3.out 2>&1 &
 # nohup python deploy/deploy_mujoco_go2/train_SAC/eval.py >nohup_sac_eval_1.out 2>&1 &

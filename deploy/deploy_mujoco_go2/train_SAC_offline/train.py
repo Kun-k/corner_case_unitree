@@ -10,7 +10,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.logger import configure as configure_sb3_logger
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file
+from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file, filter_chain_for_replay
 from deploy.deploy_mujoco_go2.reward_recompute_utils import load_reward_cfg_from_yaml, recompute_reward_from_info
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainGymEnv, TerrainTrainer
 
@@ -49,12 +49,13 @@ def preload_replay_buffer_from_pkl(
 
     for fp in files:
         try:
-            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=int(consecutive_fail_keep_k))
+            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=0)
         except Exception:
             continue
 
         for chain in chains:
-            for tr in chain:
+            filtered_chain = filter_chain_for_replay(chain, consecutive_fail_keep_k=int(consecutive_fail_keep_k))
+            for tr in filtered_chain:
                 try:
                     obs = np.asarray(tr.get("obs", []), dtype=np.float32).reshape(obs_shape)
                     next_obs = np.asarray(tr.get("next_obs", []), dtype=np.float32).reshape(obs_shape)
@@ -281,7 +282,8 @@ def train_sac_offline(cfg: dict) -> None:
     print(
         f"[train_SAC_offline] start offline training: updates={total_updates}, "
         f"grad_steps_per_update={gradient_steps_per_update}, replay_size={model.replay_buffer.size()}, "
-        f"reward_recompute={'on' if use_reward_recompute else 'off'}"
+        f"reward_recompute={'on' if use_reward_recompute else 'off'}, "
+        f"fail_keep_k={int(cfg.get('consecutive_fail_keep_k', 0))}"
     )
 
     for update in range(1, total_updates + 1):

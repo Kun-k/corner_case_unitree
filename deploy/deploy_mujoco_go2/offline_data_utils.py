@@ -1,7 +1,7 @@
 import glob
 import os
 import pickle
-from typing import Dict, Iterable, List, Sequence
+from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 DEFAULT_FAIL_KEYS = (
     "fallen",
@@ -96,6 +96,55 @@ def _is_stuck_transition(tr: Dict) -> bool:
     return False
 
 
+def filter_chain_for_replay(
+    chain: List[Dict],
+    consecutive_fail_keep_k: int = 0,
+    fail_keys: Iterable[str] = DEFAULT_FAIL_KEYS,
+    extra_keep_fn: Optional[Callable[[Dict, int], bool]] = None,
+) -> List[Dict]:
+    """Filter one transition chain for replay/add and fix done after filtering.
+
+    Rules:
+    - Only trim runs where transition is both failure and stuck.
+    - Keep at most K frames in each consecutive fail+stuck run.
+    - Optionally apply extra_keep_fn(tr, idx) for custom keep logic.
+    - If filtering creates a discontinuity, force done=True on the previous kept frame.
+    """
+    if not isinstance(chain, list) or len(chain) == 0:
+        return []
+
+    k = int(max(0, consecutive_fail_keep_k))
+    keep_indices: List[int] = []
+    stuck_fail_run = 0
+
+    for idx, tr in enumerate(chain):
+        is_fail = _is_failure_transition(tr, fail_keys=fail_keys)
+        is_stuck = _is_stuck_transition(tr)
+        is_stuck_fail = is_fail and is_stuck
+
+        if is_stuck_fail:
+            stuck_fail_run += 1
+        else:
+            stuck_fail_run = 0
+
+        keep = True
+        if k > 0 and is_stuck_fail and stuck_fail_run > k:
+            keep = False
+        if keep and extra_keep_fn is not None:
+            keep = bool(extra_keep_fn(tr, idx))
+
+        if keep:
+            keep_indices.append(idx)
+
+    selected: List[Dict] = []
+    for j, idx in enumerate(keep_indices):
+        tr = dict(chain[idx])
+        next_is_contiguous = (j + 1 < len(keep_indices)) and (keep_indices[j + 1] == idx + 1)
+        tr["done"] = bool(tr.get("done", False) or (not next_is_contiguous))
+        selected.append(tr)
+    return selected
+
+
 def _cap_consecutive_failures(chain: List[Dict], max_keep_fail: int, fail_keys: Iterable[str] = DEFAULT_FAIL_KEYS) -> List[Dict]:
     """Keep only the first K frames in each consecutive *stuck-failure* run.
 
@@ -103,29 +152,11 @@ def _cap_consecutive_failures(chain: List[Dict], max_keep_fail: int, fail_keys: 
     - Non-stuck failures are always kept.
     - If max_keep_fail <= 0, no trimming is applied.
     """
-    if int(max_keep_fail) <= 0:
-        return list(chain)
-
-    kept: List[Dict] = []
-    stuck_fail_run = 0
-    k = int(max_keep_fail)
-
-    for tr in chain:
-        is_fail = _is_failure_transition(tr, fail_keys=fail_keys)
-        is_stuck = _is_stuck_transition(tr)
-
-        # Trim only on consecutive fail+stuck frames.
-        if is_fail and is_stuck:
-            stuck_fail_run += 1
-            if stuck_fail_run <= k:
-                kept.append(tr)
-            continue
-
-        # Once stuck chain is broken, reset counter.
-        stuck_fail_run = 0
-        kept.append(tr)
-
-    return kept
+    return filter_chain_for_replay(
+        chain,
+        consecutive_fail_keep_k=int(max_keep_fail),
+        fail_keys=fail_keys,
+    )
 
 
 # def load_chains_from_pkl_paths(

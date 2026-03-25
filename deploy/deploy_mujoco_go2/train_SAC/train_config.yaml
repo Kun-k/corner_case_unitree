@@ -35,14 +35,29 @@ checkpoint_every_steps: 200
 # Optional warm-starts
 preload_model_path: ""
 preload_pkl_paths: [
-  "../train_SAC/eval_logs/random_eval_0311-1",
-  "../train_SAC/eval_logs/random_eval_0311-2",
-  "../train_SAC/eval_logs/random_eval_0311-3",
-  "../train_SAC/eval_logs/random_eval_0311-4",
-  "../train_SAC/eval_logs/random_eval_0311-5",
-  "../train_SAC/eval_logs/random_eval_0311-6",
-  "../train_SAC/eval_logs/random_eval_0311-7",
-  "../train_SAC/eval_logs/random_eval_0311-8",
+#  "../train_SAC/eval_logs/random_eval_0311-1",
+#  "../train_SAC/eval_logs/random_eval_0311-2",
+#  "../train_SAC/eval_logs/random_eval_0311-3",
+#  "../train_SAC/eval_logs/random_eval_0311-4",
+#  "../train_SAC/eval_logs/random_eval_0311-5",
+#  "../train_SAC/eval_logs/random_eval_0311-6",
+#  "../train_SAC/eval_logs/random_eval_0311-7",
+#  "../train_SAC/eval_logs/random_eval_0311-8",
+
+#  "../train_SAC/eval_logs/random_eval_0317-1",
+#  "../train_SAC/eval_logs/random_eval_0317-2",
+#  "../train_SAC/eval_logs/random_eval_0317-3",
+#  "../train_SAC/eval_logs/random_eval_0317-4",
+#  "../train_SAC/eval_logs/random_eval_0317-5",
+#  "../train_SAC/eval_logs/random_eval_0317-6",
+#  "../train_SAC/eval_logs/random_eval_0317-7",
+#  "../train_SAC/eval_logs/random_eval_0317-1",
+#  "../train_SAC/eval_logs/random_eval_0317-2",
+#  "../train_SAC/eval_logs/random_eval_0317-3",
+#  "../train_SAC/eval_logs/random_eval_0317-4",
+#  "../train_SAC/eval_logs/random_eval_0317-5",
+#  "../train_SAC/eval_logs/random_eval_0317-6",
+#  "../train_SAC/eval_logs/random_eval_0317-7",
 ]
 
 learning_starts: 100
@@ -56,7 +71,7 @@ consecutive_fail_keep_k: 1
 # If enabled: classifier score > threshold => use SAC action, else random action.
 # Only SAC-selected transitions are inserted into replay buffer.
 classifier_gate:
-  enabled: true
+  enabled: false
   checkpoint_path: "../train_offline/classifier/classifier_0316/checkpoint_epoch_860.pt"
   threshold: 0.55
   concat_action_to_obs: false
@@ -69,7 +84,7 @@ failure_pkl_name: "collision_failures.pkl"
 failure_flush_every_episodes: 50
 
 #log_name: "sac_classifier"
-log_name: "debug"
+log_name: "hhh0324_sac"
 
-# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >go2_2-10cm-preload-0317.out 2>&1 &
+# nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup-hhh0324_sac.out 2>&1 &
 # nohup python deploy/deploy_mujoco_go2/train_SAC/train.py >nohup_sac_classifier.out 2>&1 &

@@ -19,7 +19,7 @@ except ImportError:
 
 from deploy.deploy_mujoco_go2.terrain_trainer import TerrainTrainer, TerrainGymEnv
 from deploy.deploy_mujoco_go2.classifier_gate import ClassifierGate
-from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file
+from deploy.deploy_mujoco_go2.offline_data_utils import collect_pkl_files, load_chains_from_pkl_file, filter_chain_for_replay
 from deploy.deploy_mujoco_go2.reward_recompute_utils import (
     load_reward_cfg_from_yaml,
     recompute_reward_from_info,
@@ -260,55 +260,61 @@ class FilteredGatedReplayBuffer(ReplayBuffer):
     def __init__(self, *args, consecutive_fail_keep_k: int = 0, **kwargs):
         super().__init__(*args, **kwargs)
         self.consecutive_fail_keep_k = int(max(0, consecutive_fail_keep_k))
-        self._stuck_fail_run = np.zeros((self.n_envs,), dtype=np.int32)
+        self._pending = [[] for _ in range(self.n_envs)]
+
+    def _select_episode_transitions(self, episode_chain):
+        def _extra_keep_fn(tr, _idx):
+            info = tr.get("info", {}) if isinstance(tr, dict) else {}
+            return bool(info.get("use_rl_action", True)) if isinstance(info, dict) else True
+
+        return filter_chain_for_replay(
+            episode_chain,
+            consecutive_fail_keep_k=int(self.consecutive_fail_keep_k),
+            extra_keep_fn=_extra_keep_fn,
+        )
+
+    def _flush_episode(self, env_idx: int):
+        ep = self._pending[env_idx]
+        if not ep:
+            return
+
+        selected = self._select_episode_transitions(ep)
+        for tr in selected:
+            super().add(
+                np.expand_dims(tr["obs"], axis=0),
+                np.expand_dims(tr["next_obs"], axis=0),
+                np.expand_dims(tr["action"], axis=0),
+                np.array([tr["reward"]], dtype=np.float32),
+                np.array([float(bool(tr["done"]))], dtype=np.float32),
+                [tr["info"]],
+            )
+
+        self._pending[env_idx] = []
 
     def add(self, obs, next_obs, action, reward, done, infos):
         if not isinstance(infos, (list, tuple)):
-            return
+            infos = [{} for _ in range(self.n_envs)]
 
-        # 如果使用classifier，则根据use_rl_action判断，否则一定为True
-        keep = np.asarray([
-            bool(info.get("use_rl_action", True)) if isinstance(info, dict) else True
-            for info in infos
-        ], dtype=np.bool_)
+        obs = np.asarray(obs)
+        next_obs = np.asarray(next_obs)
+        action = np.asarray(action)
+        reward = np.asarray(reward).reshape(-1)
+        done = np.asarray(done).reshape(-1)
 
-        # if self.consecutive_fail_keep_k <= 0:
-        #     return super().add(obs, next_obs, action, reward, done, infos)
-        # keep = np.ones((len(infos),), dtype=np.bool_)
+        for env_idx in range(self.n_envs):
+            info = dict(infos[env_idx]) if env_idx < len(infos) and isinstance(infos[env_idx], dict) else {}
+            tr = {
+                "obs": obs[env_idx].copy(),
+                "next_obs": next_obs[env_idx].copy(),
+                "action": action[env_idx].copy(),
+                "reward": float(reward[env_idx]),
+                "done": float(done[env_idx]),
+                "info": info,
+            }
+            self._pending[env_idx].append(tr)
 
-        if self.consecutive_fail_keep_k > 0:
-            for env_i, info in enumerate(infos):
-                if not isinstance(info, dict):
-                    self._stuck_fail_run[env_i] = 0
-                    continue
-
-                is_fail = bool(
-                    info.get("fallen", False)
-                    # or info.get("collided", False)
-                    or info.get("base_collision", False)
-                    or info.get("thigh_collision", False)
-                    or info.get("stuck", False)
-                )
-                is_stuck = bool(info.get("stuck", False))
-
-                if is_fail and is_stuck:
-                    self._stuck_fail_run[env_i] += 1
-                    if self._stuck_fail_run[env_i] > self.consecutive_fail_keep_k:
-                        keep[env_i] = False
-                else:
-                    self._stuck_fail_run[env_i] = 0
-
-        if keep.size == 0 or not np.any(keep):
-            return
-
-        super().add(
-            obs[keep],
-            next_obs[keep],
-            action[keep],
-            reward[keep],
-            done[keep],
-            [infos[i] for i in np.where(keep)[0]],
-        )
+            if bool(done[env_idx]):
+                self._flush_episode(env_idx)
 
 
 class GatedSAC(SAC):
@@ -398,12 +404,13 @@ def preload_replay_buffer_from_pkl(model, pkl_paths, reward_cfg=None, consecutiv
 
     for fp in files:
         try:
-            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=int(consecutive_fail_keep_k))
+            chains = load_chains_from_pkl_file(fp, consecutive_fail_keep_k=0)
         except Exception:
             continue
 
         for chain in chains:
-            for tr in chain:
+            filtered_chain = filter_chain_for_replay(chain, consecutive_fail_keep_k=int(consecutive_fail_keep_k))
+            for tr in filtered_chain:
                 try:
                     obs = np.asarray(tr.get("obs", []), dtype=np.float32).reshape(obs_shape)
                     next_obs = np.asarray(tr.get("next_obs", []), dtype=np.float32).reshape(obs_shape)
