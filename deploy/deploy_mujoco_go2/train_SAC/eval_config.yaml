@@ -14,20 +14,25 @@ go2_task: "terrain"
 go2_config: "go2.yaml"
 terrain_config: "terrain_config.yaml"
 
-episodes: 8000
-
+episodes: 1000
 max_episode_steps: 35
 seed: 122
 
 #log_name: "nohup_random_eval_go2-2_15cm_4"
 #log_name: "random_eval_0317-7"
 #log_name: "debug"
-log_name: "sac_eval_gogogo0316_preload"
+#log_name: "sac_eval_gogogo0316_preload"
+log_name: "sac_eval_weighted30"
 
 use_curr_force: False  # 强制使用当前配置
 
-render: False
-save_non_failure_trajectories: False
+render: false
+save_non_failure_trajectories: false
+
+sampling:
+  # Probability of sampling action from uniform distribution.
+  # 0.0 = pure SAC sampling, 1.0 = pure uniform sampling.
+  uniform_weight: 0.30
 
 classifier_gate:
   enabled: false

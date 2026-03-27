@@ -28,7 +28,7 @@ visualization:
 
 logging:
   # If true, info includes per-substep Go2 rollout traces (large payload).
-  enable_trace: True
+  enable_trace: False
 
 event_and_reward:
   # fall
