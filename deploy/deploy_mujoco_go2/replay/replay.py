@@ -219,7 +219,7 @@ def _apply_terrain_only(trainer: TerrainTrainer, tr: Dict) -> None:
     terrain_action = _extract_terrain_action(tr)
 
     trainer.terrain_changer.apply_action_vector(terrain_action)
-    trainer.terrain_changer._refresh_terrain()
+    trainer.terrain_changer._refresh_terrain_safe()
 
     if trainer.render:
         trainer.viewer.update_hfield(trainer.terrain_changer.hfield_id)
@@ -230,7 +230,7 @@ def _apply_terrain_only(trainer: TerrainTrainer, tr: Dict) -> None:
 
 def _set_hfield_and_refresh(trainer: TerrainTrainer, hfield_2d: np.ndarray) -> None:
     trainer.terrain_changer.hfield[:, :] = hfield_2d
-    trainer.terrain_changer._refresh_terrain()
+    trainer.terrain_changer._refresh_terrain_safe()
     if trainer.render:
         trainer.viewer.update_hfield(trainer.terrain_changer.hfield_id)
         if trainer.lock_camera:
